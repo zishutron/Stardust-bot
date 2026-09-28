@@ -1229,7 +1229,7 @@ def api_callback():
         persist_sessions()
         resp = make_response(redirect(f"{FRONTEND_URL}/?login=success"))
         resp.set_cookie("stardust_session", sid, httponly=True, secure=True,
-                        samesite="Lax", max_age=7*86400)
+                samesite="None", max_age=7*86400, domain=None)
         return resp
     except Exception as e:
         print(f"[OAUTH] {e}")
