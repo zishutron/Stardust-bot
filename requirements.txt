@@ -1,5 +1,6 @@
-discord.py
-flask
-Pillow
-requests
-flask-cors
+discord.py>=2.3.2
+flask>=3.0.0
+Pillow>=10.0.0
+requests>=2.31.0
+flask-cors>=4.0.0
+werkzeug>=3.0.0
