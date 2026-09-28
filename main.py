@@ -1,8 +1,8 @@
 # ==============================================================================
-# 🌟 STARDUST BOT — PRODUCTION v2.0
-# Author: Zishan | Fixes: duplicate handlers, persistence, real API layer
+# 🌟 STARDUST BOT — PRODUCTION v2.1
+# Cross-domain cookie fix (GitHub Pages ↔ Render)
 # ==============================================================================
-import os, io, json, time, random, asyncio, secrets, datetime, hashlib, traceback
+import os, io, json, time, random, asyncio, secrets, datetime, traceback
 from threading import Thread
 from functools import wraps
 
@@ -22,7 +22,7 @@ DISCORD_TOKEN    = os.environ.get("DISCORD_TOKEN")
 CLIENT_ID        = os.environ.get("DISCORD_CLIENT_ID")
 CLIENT_SECRET    = os.environ.get("DISCORD_CLIENT_SECRET")
 OAUTH_REDIRECT   = os.environ.get("OAUTH_REDIRECT", "https://stardust-bot.onrender.com/api/callback")
-FRONTEND_URL     = os.environ.get("FRONTEND_URL", "https://stardust-bot.onrender.com")
+FRONTEND_URL     = os.environ.get("FRONTEND_URL", "https://zishutron.github.io").rstrip("/")
 SESSION_SECRET   = os.environ.get("SESSION_SECRET", secrets.token_hex(32))
 DATA_DIR         = os.environ.get("STARDUST_DATA_DIR", "./data")
 PORT             = int(os.environ.get("PORT", 8080))
@@ -32,8 +32,22 @@ if not DISCORD_TOKEN:
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
+# Allowed CORS origins — frontend + localhost for dev
+ALLOWED_ORIGINS = [
+    FRONTEND_URL,
+    FRONTEND_URL + "/Stardust-discord-bot",  # in case path is passed
+    "https://zishutron.github.io",
+    "http://localhost:8080",
+    "http://localhost:3000",
+    "http://127.0.0.1:8080",
+]
+
+print(f"[CONFIG] FRONTEND_URL = {FRONTEND_URL}")
+print(f"[CONFIG] OAUTH_REDIRECT = {OAUTH_REDIRECT}")
+print(f"[CONFIG] DATA_DIR = {DATA_DIR}")
+
 # ==============================================================================
-# 💾 STORAGE LAYER (atomic JSON, corrupt-file safe)
+# 💾 STORAGE LAYER
 # ==============================================================================
 def _fp(name): return os.path.join(DATA_DIR, f"{name}.json")
 
@@ -60,7 +74,6 @@ def save_data(name, data):
     except Exception as e:
         print(f"[STORAGE] Failed saving {name}: {e}")
 
-# Named stores
 SERVER_CONFIGS = load_data("server_configurations", {})
 AUTO_RESPONSES = load_data("auto_responses", {})
 BLOCK_LIST     = load_data("block_list", {"words": ["fuck","bitch","asshole","slut","dick","bastard"]})
@@ -88,7 +101,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 XP_COOLDOWN = {}
 
 # ==============================================================================
-# 🎨 RANK TIERS (unchanged)
+# 🎨 RANK TIERS
 # ==============================================================================
 def get_ff_rank(level):
     if level < 5:  return "🥉 Bronze I"
@@ -197,11 +210,6 @@ def parse_duration(s):
     if not m: return 0
     n, u = int(m.group(1)), m.group(2)
     return n * {"s":1, "m":60, "h":3600, "d":86400}[u]
-
-def user_has_admin(user, guild):
-    member = guild.get_member(user.id)
-    if not member: return False
-    return member.guild_permissions.administrator or member.guild_permissions.manage_guild
 
 # ==============================================================================
 # 🎫 PERSISTENT VIEWS
@@ -464,13 +472,13 @@ async def on_ready():
     if not reminder_checker_loop.is_running():
         reminder_checker_loop.start()
 
-# --------- SINGLE UNIFIED on_message ---------
+# --------- UNIFIED on_message ---------
 @bot.event
 async def on_message(message):
     if message.author.bot or not message.guild: return
     g_id = str(message.guild.id)
 
-    # 1. AFK auto-clear + mention responder
+    # AFK
     afk = load_data("afk", {})
     auid = str(message.author.id)
     if auid in afk:
@@ -483,14 +491,14 @@ async def on_message(message):
             try: await message.channel.send(embed=discord.Embed(description=f"💤 {u.name} is AFK: `{afk[uid]}`", color=0xF5EAE1), delete_after=7)
             except Exception: pass
 
-    # 2. Auto-responder
+    # Auto-responder
     if g_id in AUTO_RESPONSES:
         clean = message.content.lower().strip()
         if clean in AUTO_RESPONSES[g_id]:
             await message.channel.send(AUTO_RESPONSES[g_id][clean])
             return
 
-    # 3. AutoMod
+    # AutoMod
     if SERVER_CONFIGS.get(g_id, {}).get("automod_enabled", True):
         clean = message.content.lower().strip()
         for w in BLOCK_LIST.get("words", []):
@@ -507,7 +515,7 @@ async def on_message(message):
                 except Exception as e: print(f"[AUTOMOD] {e}")
                 return
 
-    # 4. Anime $m/$w
+    # Anime $m/$w
     content = message.content.strip().lower()
     if content in ("$m","$w"):
         pool = ANIME_MALES if content == "$m" else ANIME_FEMALES
@@ -531,7 +539,7 @@ async def on_message(message):
         asyncio.create_task(wait_claim())
         return
 
-    # 5. Economy + XP
+    # Economy + XP
     try:
         uid = str(message.author.id)
         eco = load_data("economy", {})
@@ -576,7 +584,7 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-# --------- SINGLE on_member_join ---------
+# --------- on_member_join ---------
 @bot.event
 async def on_member_join(member):
     cfg = SERVER_CONFIGS.get(str(member.guild.id), {})
@@ -587,7 +595,7 @@ async def on_member_join(member):
             try: await ch.send(content=f"Welcome {member.mention}!", embed=generate_welcome_card(member))
             except Exception as e: print(f"[WELCOME] {e}")
 
-# --------- SINGLE on_member_remove (welcome-leave + dedicated leave) ---------
+# --------- on_member_remove ---------
 @bot.event
 async def on_member_remove(member):
     gid = str(member.guild.id)
@@ -617,7 +625,7 @@ async def on_member_remove(member):
                 await lch.send(content=f"⚠️ {member.mention}", embed=e)
             except Exception: pass
 
-# --------- BOOST REWARD ---------
+# --------- on_member_update (boost) ---------
 @bot.event
 async def on_member_update(before, after):
     if not before.premium_since and after.premium_since:
@@ -791,7 +799,7 @@ async def removerole(i, member: discord.Member, role: discord.Role):
     except discord.Forbidden: await i.followup.send("❌ No permission.", ephemeral=True)
 
 # ==============================================================================
-# ☕ SERVE, HUG, KISS, SLAP
+# ☕ SERVE + ANIME
 # ==============================================================================
 MENU = {
     "coffee":     {"title":"BARISTA ESPRESSO","item_name":"Premium Barista Coffee","origin":"Milan, Italy 🇮🇹","line":"Rich espresso with velvety crema.","price":50},
@@ -835,6 +843,17 @@ async def serve(i, item: str, member: discord.Member):
     emb.set_footer(text=f"Balance: {eco[uid]['balance']} coins")
     await i.followup.send(content=f"🛎️ {member.mention}, served!", embed=emb)
 
+ANIME_MALES = [
+    {"name": "Levi Ackerman", "anime": "Attack on Titan", "image": "https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=500"},
+    {"name": "Gojo Satoru", "anime": "Jujutsu Kaisen", "image": "https://images.unsplash.com/photo-1578632767115-351597cf2477?w=500"},
+    {"name": "Naruto Uzumaki", "anime": "Naruto Shippuden", "image": "https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?w=500"},
+]
+ANIME_FEMALES = [
+    {"name": "Helena Croisen", "anime": "Master of the Guardian Stone", "image": "https://images.unsplash.com/photo-1560942485-b2a11cc13456?w=500"},
+    {"name": "Mikasa Ackerman", "anime": "Attack on Titan", "image": "https://images.unsplash.com/photo-1580477667995-2b94f01c9516?w=500"},
+    {"name": "Nezuko Kamado", "anime": "Demon Slayer", "image": "https://images.unsplash.com/photo-1627556704353-016ed97397b9?w=500"},
+]
+
 def _anime_cmd(name, title, verb, verb2, color, gif):
     @bot.tree.command(name=name, description=f"{title}")
     async def cmd(i, member: discord.Member):
@@ -857,7 +876,7 @@ _anime_cmd("slap","💢 Ouch!","SLAPS","across the face!",
            "https://media.giphy.com/media/Zau0yrl17uzdK/giphy.gif")
 
 # ==============================================================================
-# 💰 ECONOMY (DAILY, WALLET, MENU, SHOP, INVENTORY)
+# 💰 ECONOMY
 # ==============================================================================
 SHOP_ITEMS = {
     "nebula_kitten":  {"price":1200, "type":"Pet","display":"🐱 Nebula Kitten","desc":"Floating space kitty."},
@@ -955,7 +974,7 @@ async def inventory(i):
     await i.response.send_message(embed=emb)
 
 # ==============================================================================
-# 🏆 LEADERBOARDS, GIVEAWAYS, TICKETS, EMBED
+# 🏆 LEADERBOARDS + GIVEAWAYS + TICKETS + EMBED
 # ==============================================================================
 @bot.tree.command(name="richest", description="🏆 Top 10 richest members")
 async def richest(i):
@@ -1154,68 +1173,138 @@ async def play_slap(i, opponent: discord.User = None):
 # ==============================================================================
 # 🔄 BACKGROUND LOOPS
 # ==============================================================================
-@tasks.loop(seconds=30)
+@tasks.loop(seconds=60)
 async def reminder_checker_loop():
-    pass  # Placeholder — /remindme now uses asyncio.sleep directly
+    # Cleanup expired sessions
+    now = time.time()
+    changed = False
+    for sid in list(SESSIONS.keys()):
+        if SESSIONS[sid].get("expires", 0) < now:
+            del SESSIONS[sid]
+            changed = True
+    if changed:
+        persist_sessions()
 
 # ==============================================================================
-# 🌐 FLASK + REAL API
+# 🌐 FLASK APP + REAL API
 # ==============================================================================
 flask_app = Flask(__name__)
 flask_app.secret_key = SESSION_SECRET
 flask_app.wsgi_app = ProxyFix(flask_app.wsgi_app, x_for=1, x_proto=1, x_host=1)
-CORS(flask_app, supports_credentials=True, origins=[FRONTEND_URL, "http://localhost:8080"])
 
+# Cross-domain CORS with credentials
+CORS(
+    flask_app,
+    supports_credentials=True,
+    origins=ALLOWED_ORIGINS,
+    allow_headers=["Content-Type", "Authorization"],
+    methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    expose_headers=["Content-Type"],
+    max_age=3600
+)
+
+# --------- Helpers for cross-domain cookies ---------
+def set_session_cookie(resp, sid, max_age=7*86400):
+    """
+    Sets the session cookie with cross-domain friendly attributes.
+    SameSite=None requires Secure=True; browsers only accept it over HTTPS.
+    """
+    resp.set_cookie(
+        "stardust_session",
+        sid,
+        max_age=max_age,
+        httponly=True,
+        secure=True,          # REQUIRED for SameSite=None
+        samesite="None",      # allows cross-site (GitHub Pages → Render)
+        path="/",
+        domain=None           # host-only cookie for onrender.com
+    )
+
+def clear_session_cookie(resp):
+    resp.delete_cookie(
+        "stardust_session",
+        path="/",
+        secure=True,
+        samesite="None",
+        httponly=True
+    )
+
+# --------- Public ---------
 @flask_app.route("/")
 def home():
-    return jsonify({"status": "ok", "service": "Stardust API", "version": "2.0.0"})
+    return jsonify({"status": "ok", "service": "Stardust API", "version": "2.1.0"})
 
 @flask_app.route("/api/health")
 def health():
-    return jsonify({
-        "success": True,
-        "data": {
-            "api": "ok",
-            "bot_ready": bot.is_ready(),
-            "bot_latency_ms": round(bot.latency*1000) if bot.is_ready() else None,
-            "guild_count": len(bot.guilds) if bot.is_ready() else 0,
-            "timestamp": int(time.time())
-        }
-    })
+    try:
+        ready = bot.is_ready()
+        return jsonify({
+            "success": True,
+            "data": {
+                "api": "ok",
+                "bot_ready": ready,
+                "bot_latency_ms": round(bot.latency * 1000) if ready else None,
+                "guild_count": len(bot.guilds) if ready else 0,
+                "timestamp": int(time.time())
+            }
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": {"code": "HEALTH_ERR", "message": str(e)}}), 500
 
-# --------- OAuth: Step 1 — redirect to Discord ---------
+# --------- OAuth Step 1 ---------
 @flask_app.route("/api/login")
 def api_login():
     if not CLIENT_ID:
-        return jsonify({"success": False, "error": {"code":"NO_CLIENT","message":"Server misconfigured"}}), 500
+        return jsonify({"success": False, "error": {"code": "NO_CLIENT", "message": "Server misconfigured"}}), 500
     state = secrets.token_urlsafe(24)
     scope = "identify guilds"
-    url = (f"https://discord.com/oauth2/authorize?client_id={CLIENT_ID}"
-           f"&redirect_uri={OAUTH_REDIRECT}&response_type=code&scope={scope.replace(' ','%20')}"
-           f"&state={state}")
+    url = (
+        f"https://discord.com/oauth2/authorize"
+        f"?client_id={CLIENT_ID}"
+        f"&redirect_uri={requests.utils.quote(OAUTH_REDIRECT, safe='')}"
+        f"&response_type=code"
+        f"&scope={scope.replace(' ', '%20')}"
+        f"&state={state}"
+        f"&prompt=consent"
+    )
     return jsonify({"success": True, "data": {"url": url, "state": state}})
 
-# --------- OAuth: Step 2 — callback ---------
+# --------- OAuth Step 2 (callback) ---------
 @flask_app.route("/api/callback")
 def api_callback():
     code = request.args.get("code")
     if not code:
         return redirect(f"{FRONTEND_URL}/?login_error=missing_code")
     try:
-        r = requests.post("https://discord.com/api/oauth2/token", data={
-            "client_id": CLIENT_ID, "client_secret": CLIENT_SECRET,
-            "grant_type": "authorization_code", "code": code,
-            "redirect_uri": OAUTH_REDIRECT
-        }, timeout=10)
+        r = requests.post(
+            "https://discord.com/api/oauth2/token",
+            data={
+                "client_id": CLIENT_ID,
+                "client_secret": CLIENT_SECRET,
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": OAUTH_REDIRECT
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=15
+        )
         if r.status_code != 200:
+            print(f"[OAUTH] token exchange failed: {r.status_code} {r.text}")
             return redirect(f"{FRONTEND_URL}/?login_error=oauth_failed")
+
         tok = r.json()
         access_token = tok.get("access_token")
-        # fetch user
-        u = requests.get("https://discord.com/api/users/@me",
-                         headers={"Authorization": f"Bearer {access_token}"}, timeout=10).json()
+
+        u = requests.get(
+            "https://discord.com/api/users/@me",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=15
+        ).json()
+
         uid = u.get("id")
-        # create session
+        if not uid:
+            return redirect(f"{FRONTEND_URL}/?login_error=user_fetch")
+
         sid = secrets.token_urlsafe(32)
         SESSIONS[sid] = {
             "user_id": uid,
@@ -1227,52 +1316,65 @@ def api_callback():
             "expires": int(time.time()) + 7*86400
         }
         persist_sessions()
+
         resp = make_response(redirect(f"{FRONTEND_URL}/?login=success"))
-        resp.set_cookie("stardust_session", sid, httponly=True, secure=True,
-                samesite="None", max_age=7*86400, domain=None)
+        set_session_cookie(resp, sid)
         return resp
     except Exception as e:
-        print(f"[OAUTH] {e}")
+        print(f"[OAUTH] exception: {e}")
+        traceback.print_exc()
         return redirect(f"{FRONTEND_URL}/?login_error=server")
 
+# --------- Session helpers ---------
 def get_session():
     sid = request.cookies.get("stardust_session")
-    if not sid or sid not in SESSIONS: return None
+    if not sid or sid not in SESSIONS:
+        return None
     s = SESSIONS[sid]
     if s.get("expires", 0) < time.time():
-        del SESSIONS[sid]; persist_sessions()
+        del SESSIONS[sid]
+        persist_sessions()
         return None
     return s
 
+# --------- Auth endpoints ---------
 @flask_app.route("/api/auth/me")
 def auth_me():
     s = get_session()
     if not s:
-        return jsonify({"success": False, "error": {"code":"UNAUTHORIZED","message":"Not logged in"}}), 401
+        return jsonify({"success": False, "error": {"code": "UNAUTHORIZED", "message": "Not logged in"}}), 401
     return jsonify({"success": True, "data": {
-        "id": s["user_id"], "username": s["username"],
-        "global_name": s.get("global_name"), "avatar": s.get("avatar")
+        "id": s["user_id"],
+        "username": s["username"],
+        "global_name": s.get("global_name"),
+        "avatar": s.get("avatar")
     }})
 
-@flask_app.route("/api/logout", methods=["POST"])
+@flask_app.route("/api/logout", methods=["POST", "OPTIONS"])
 def auth_logout():
+    if request.method == "OPTIONS":
+        return ("", 204)
     sid = request.cookies.get("stardust_session")
     if sid and sid in SESSIONS:
-        del SESSIONS[sid]; persist_sessions()
+        del SESSIONS[sid]
+        persist_sessions()
     resp = make_response(jsonify({"success": True}))
-    resp.delete_cookie("stardust_session")
+    clear_session_cookie(resp)
     return resp
 
 @flask_app.route("/api/auth/servers")
 def auth_servers():
     s = get_session()
     if not s:
-        return jsonify({"success": False, "error": {"code":"UNAUTHORIZED","message":"Not logged in"}}), 401
+        return jsonify({"success": False, "error": {"code": "UNAUTHORIZED", "message": "Not logged in"}}), 401
     try:
-        r = requests.get("https://discord.com/api/users/@me/guilds",
-                         headers={"Authorization": f"Bearer {s['access_token']}"}, timeout=10)
+        r = requests.get(
+            "https://discord.com/api/users/@me/guilds",
+            headers={"Authorization": f"Bearer {s['access_token']}"},
+            timeout=15
+        )
         if r.status_code != 200:
-            return jsonify({"success": False, "error": {"code":"DISCORD_ERROR","message":"Couldn't fetch guilds"}}), 502
+            return jsonify({"success": False, "error": {"code": "DISCORD_ERROR", "message": "Couldn't fetch guilds"}}), 502
         guilds = r.json()
         bot_guild_ids = {str(g.id) for g in bot.guilds} if bot.is_ready() else set()
         out = []
@@ -1280,7 +1382,9 @@ def auth_servers():
             perms = int(g.get("permissions", 0))
             is_admin = bool(perms & 0x8) or bool(perms & 0x20)
             out.append({
-                "id": g["id"], "name": g["name"], "icon": g.get("icon"),
+                "id": g["id"],
+                "name": g["name"],
+                "icon": g.get("icon"),
                 "owner": g.get("owner", False),
                 "permissions": perms,
                 "can_manage": is_admin,
@@ -1289,44 +1393,50 @@ def auth_servers():
         return jsonify({"success": True, "data": out})
     except Exception as e:
         print(f"[SERVERS] {e}")
-        return jsonify({"success": False, "error": {"code":"SERVER_ERROR","message":"Failed"}}), 500
+        return jsonify({"success": False, "error": {"code": "SERVER_ERROR", "message": "Failed"}}), 500
 
+# --------- Guild access validation ---------
 def _require_guild_access(guild_id):
     s = get_session()
     if not s:
-        return None, (jsonify({"success": False, "error": {"code":"UNAUTHORIZED","message":"Not logged in"}}), 401)
+        return None, (jsonify({"success": False, "error": {"code": "UNAUTHORIZED", "message": "Not logged in"}}), 401)
     try:
-        r = requests.get("https://discord.com/api/users/@me/guilds",
-                         headers={"Authorization": f"Bearer {s['access_token']}"}, timeout=10)
+        r = requests.get(
+            "https://discord.com/api/users/@me/guilds",
+            headers={"Authorization": f"Bearer {s['access_token']}"},
+            timeout=15
+        )
         guilds = r.json() if r.status_code == 200 else []
         target = next((g for g in guilds if g["id"] == guild_id), None)
         if not target:
-            return None, (jsonify({"success": False, "error": {"code":"FORBIDDEN","message":"Not a member"}}), 403)
+            return None, (jsonify({"success": False, "error": {"code": "FORBIDDEN", "message": "Not a member of this server"}}), 403)
         perms = int(target.get("permissions", 0))
         if not (perms & 0x8 or perms & 0x20):
-            return None, (jsonify({"success": False, "error": {"code":"FORBIDDEN","message":"Missing admin permission"}}), 403)
+            return None, (jsonify({"success": False, "error": {"code": "FORBIDDEN", "message": "Missing administrator permission"}}), 403)
         if not bot.is_ready() or not bot.get_guild(int(guild_id)):
-            return None, (jsonify({"success": False, "error": {"code":"BOT_MISSING","message":"Bot not on server"}}), 409)
+            return None, (jsonify({"success": False, "error": {"code": "BOT_MISSING", "message": "Stardust is not on this server"}}), 409)
         return s, None
     except Exception as e:
         print(f"[GUILD_ACCESS] {e}")
-        return None, (jsonify({"success": False, "error": {"code":"SERVER_ERROR","message":"Failed"}}), 500)
+        return None, (jsonify({"success": False, "error": {"code": "SERVER_ERROR", "message": "Failed"}}), 500)
 
+# --------- Guild overview ---------
 @flask_app.route("/api/guilds/<guild_id>/overview")
 def guild_overview(guild_id):
     s, err = _require_guild_access(guild_id)
     if err: return err
     g = bot.get_guild(int(guild_id))
     if not g:
-        return jsonify({"success": False, "error": {"code":"BOT_MISSING","message":"Bot not present"}}), 409
+        return jsonify({"success": False, "error": {"code": "BOT_MISSING", "message": "Bot not present"}}), 409
     cfg = SERVER_CONFIGS.get(guild_id, {})
     return jsonify({"success": True, "data": {
-        "id": g.id, "name": g.name,
+        "id": g.id,
+        "name": g.name,
         "icon": g.icon.url if g.icon else None,
         "member_count": g.member_count,
         "channel_count": len(g.channels),
         "role_count": len(g.roles),
-        "bot_latency_ms": round(bot.latency*1000),
+        "bot_latency_ms": round(bot.latency * 1000),
         "bot_present": True,
         "modules": {
             "welcome": bool(cfg.get("channel")),
@@ -1338,18 +1448,21 @@ def guild_overview(guild_id):
         }
     }})
 
+# --------- Config ---------
 @flask_app.route("/api/guilds/<guild_id>/config", methods=["GET"])
 def get_config(guild_id):
     s, err = _require_guild_access(guild_id)
     if err: return err
     return jsonify({"success": True, "data": SERVER_CONFIGS.get(guild_id, {})})
 
-@flask_app.route("/api/guilds/<guild_id>/config", methods=["PATCH"])
+@flask_app.route("/api/guilds/<guild_id>/config", methods=["PATCH", "OPTIONS"])
 def patch_config(guild_id):
+    if request.method == "OPTIONS":
+        return ("", 204)
     s, err = _require_guild_access(guild_id)
     if err: return err
     body = request.get_json(silent=True) or {}
-    allowed = {"channel","reward_channel","level_channel","level_msg","automod_enabled"}
+    allowed = {"channel", "reward_channel", "level_channel", "level_msg", "automod_enabled"}
     cfg = SERVER_CONFIGS.setdefault(guild_id, {})
     for k, v in body.items():
         if k in allowed:
@@ -1357,8 +1470,11 @@ def patch_config(guild_id):
     persist_server_configs()
     return jsonify({"success": True, "data": cfg})
 
-@flask_app.route("/api/guilds/<guild_id>/automod/words", methods=["GET","POST","DELETE"])
+# --------- AutoMod words ---------
+@flask_app.route("/api/guilds/<guild_id>/automod/words", methods=["GET", "POST", "DELETE", "OPTIONS"])
 def automod_words(guild_id):
+    if request.method == "OPTIONS":
+        return ("", 204)
     s, err = _require_guild_access(guild_id)
     if err: return err
     words = BLOCK_LIST.setdefault("words", [])
@@ -1367,14 +1483,17 @@ def automod_words(guild_id):
     body = request.get_json(silent=True) or {}
     w = (body.get("word") or "").lower().strip()
     if not w:
-        return jsonify({"success": False, "error": {"code":"INVALID","message":"Word required"}}), 400
+        return jsonify({"success": False, "error": {"code": "INVALID", "message": "Word required"}}), 400
     if request.method == "POST":
-        if w not in words: words.append(w)
+        if w not in words:
+            words.append(w)
     else:
-        if w in words: words.remove(w)
+        if w in words:
+            words.remove(w)
     persist_block_list()
     return jsonify({"success": True, "data": words})
 
+# --------- Economy leaderboard ---------
 @flask_app.route("/api/guilds/<guild_id>/economy/leaderboard")
 def economy_lb(guild_id):
     s, err = _require_guild_access(guild_id)
@@ -1397,22 +1516,31 @@ def economy_lb(guild_id):
         })
     return jsonify({"success": True, "data": out})
 
-@flask_app.route("/api/guilds/<guild_id>/giveaway", methods=["POST"])
+# --------- Giveaway ---------
+@flask_app.route("/api/guilds/<guild_id>/giveaway", methods=["POST", "OPTIONS"])
 def api_giveaway(guild_id):
+    if request.method == "OPTIONS":
+        return ("", 204)
     s, err = _require_guild_access(guild_id)
     if err: return err
     body = request.get_json(silent=True) or {}
-    prize = body.get("prize"); duration = body.get("duration"); winners = int(body.get("winners", 1))
+    prize = body.get("prize")
+    duration = body.get("duration")
+    winners = int(body.get("winners", 1))
     channel_id = body.get("channel_id")
     if not (prize and duration and channel_id):
-        return jsonify({"success": False, "error": {"code":"INVALID","message":"Missing fields"}}), 400
-    asyncio.run_coroutine_threadsafe(_deploy_giveaway(guild_id, channel_id, duration, winners, prize, s["user_id"]), bot.loop)
+        return jsonify({"success": False, "error": {"code": "INVALID", "message": "Missing fields"}}), 400
+    asyncio.run_coroutine_threadsafe(
+        _deploy_giveaway(guild_id, channel_id, duration, winners, prize, s["user_id"]),
+        bot.loop
+    )
     return jsonify({"success": True, "data": {"queued": True}})
 
 async def _deploy_giveaway(guild_id, channel_id, duration, winners, prize, host_id):
     secs = parse_duration(duration)
     if secs <= 0: return
-    g = bot.get_guild(int(guild_id)); ch = g.get_channel(int(channel_id))
+    g = bot.get_guild(int(guild_id))
+    ch = g.get_channel(int(channel_id)) if g else None
     if not ch: return
     emb = discord.Embed(title=f"🎁 {prize.upper()} 🎁",
         description=(f"♡ React with 🎉!\n♡ **Ends:** in {duration}\n"
@@ -1421,8 +1549,10 @@ async def _deploy_giveaway(guild_id, channel_id, duration, winners, prize, host_
     m = await ch.send(embed=emb)
     await m.add_reaction("🎉")
     await asyncio.sleep(secs)
-    try: m = await ch.fetch_message(m.id)
-    except Exception: return
+    try:
+        m = await ch.fetch_message(m.id)
+    except Exception:
+        return
     r = discord.utils.get(m.reactions, emoji="🎉")
     if not r: return
     users = [u async for u in r.users() if not u.bot]
@@ -1432,26 +1562,30 @@ async def _deploy_giveaway(guild_id, channel_id, duration, winners, prize, host_
     await m.edit(embed=discord.Embed(title="🎉 ENDED",
         description=f"♡ **{prize}**\n♡ Winners: {', '.join(w.mention for w in chosen)}", color=0x32CD32))
 
-@flask_app.route("/api/guilds/<guild_id>/embed", methods=["POST"])
+# --------- Embed send ---------
+@flask_app.route("/api/guilds/<guild_id>/embed", methods=["POST", "OPTIONS"])
 def api_embed(guild_id):
+    if request.method == "OPTIONS":
+        return ("", 204)
     s, err = _require_guild_access(guild_id)
     if err: return err
     body = request.get_json(silent=True) or {}
     ch_id = body.get("channel_id")
     if not ch_id:
-        return jsonify({"success": False, "error": {"code":"INVALID","message":"channel_id required"}}), 400
+        return jsonify({"success": False, "error": {"code": "INVALID", "message": "channel_id required"}}), 400
     asyncio.run_coroutine_threadsafe(_send_embed(guild_id, ch_id, body, s["user_id"]), bot.loop)
     return jsonify({"success": True, "data": {"queued": True}})
 
 async def _send_embed(guild_id, ch_id, body, author_id):
-    g = bot.get_guild(int(guild_id)); ch = g.get_channel(int(ch_id))
+    g = bot.get_guild(int(guild_id))
+    ch = g.get_channel(int(ch_id)) if g else None
     if not ch: return
     try:
         col = discord.Color.blurple()
         if body.get("color"):
             try: col = discord.Color.from_str(body["color"])
             except Exception: pass
-        emb = discord.Embed(title=body.get("title",""), description=body.get("description",""),
+        emb = discord.Embed(title=body.get("title", ""), description=body.get("description", ""),
                             color=col, timestamp=discord.utils.utcnow())
         emb.set_footer(text=f"By {author_id}")
         if body.get("image_url") and str(body["image_url"]).startswith("http"):
@@ -1460,29 +1594,35 @@ async def _send_embed(guild_id, ch_id, body, author_id):
     except Exception as e:
         print(f"[EMBED_SEND] {e}")
 
-@flask_app.route("/api/guilds/<guild_id>/tickets/deploy", methods=["POST"])
+# --------- Ticket deploy ---------
+@flask_app.route("/api/guilds/<guild_id>/tickets/deploy", methods=["POST", "OPTIONS"])
 def api_ticket_deploy(guild_id):
+    if request.method == "OPTIONS":
+        return ("", 204)
     s, err = _require_guild_access(guild_id)
     if err: return err
     body = request.get_json(silent=True) or {}
     ch_id = body.get("channel_id")
     if not ch_id:
-        return jsonify({"success": False, "error": {"code":"INVALID","message":"channel_id required"}}), 400
+        return jsonify({"success": False, "error": {"code": "INVALID", "message": "channel_id required"}}), 400
     asyncio.run_coroutine_threadsafe(_deploy_ticket_panel(guild_id, ch_id), bot.loop)
     return jsonify({"success": True, "data": {"queued": True}})
 
 async def _deploy_ticket_panel(guild_id, ch_id):
-    g = bot.get_guild(int(guild_id)); ch = g.get_channel(int(ch_id))
+    g = bot.get_guild(int(guild_id))
+    ch = g.get_channel(int(ch_id)) if g else None
     if not ch: return
     tc = load_data("ticket_config", {}).get(str(guild_id), {})
     desc = tc.get("panel_desc", "Need assistance? Click below for a private support channel.")
     emb = discord.Embed(title="📩 Help & Support Portal", description=desc, color=0x57F287)
     emb.set_footer(text="Stardust Helpdesk")
-    try: await ch.send(embed=emb, view=TicketLauncherView())
-    except Exception as e: print(f"[TICKET_DEPLOY] {e}")
+    try:
+        await ch.send(embed=emb, view=TicketLauncherView())
+    except Exception as e:
+        print(f"[TICKET_DEPLOY] {e}")
 
 # ==============================================================================
-# 🚀 KEEP-ALIVE + STARTUP
+# 🚀 STARTUP
 # ==============================================================================
 def run_flask():
     flask_app.run(host="0.0.0.0", port=PORT, threaded=True, use_reloader=False)
@@ -1501,6 +1641,7 @@ def run_bot():
         traceback.print_exc()
 
 if __name__ == "__main__":
+    print("🚀 Starting Stardust…")
     keep_alive()
     time.sleep(2)
     run_bot()
