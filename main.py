@@ -1,8 +1,9 @@
 # ==============================================================================
-# 🌟 STARDUST BOT — PRODUCTION v2.1
-# Cross-domain cookie fix (GitHub Pages ↔ Render)
+# 🌟 STARDUST BOT — PRODUCTION v3.0
+# Fully customizable: Welcome, Leave, Booster, AutoMod, Tickets, Leveling,
+# Economy, Shop, Giveaways, Auto-Responder, Logging, and more.
 # ==============================================================================
-import os, io, json, time, random, asyncio, secrets, datetime, traceback
+import os, io, json, time, random, asyncio, secrets, datetime, traceback, re
 from threading import Thread
 from functools import wraps
 
@@ -32,19 +33,18 @@ if not DISCORD_TOKEN:
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# Allowed CORS origins — frontend + localhost for dev
-ALLOWED_ORIGINS = [
+ALLOWED_ORIGINS = list(set([
     FRONTEND_URL,
-    FRONTEND_URL + "/Stardust-discord-bot",  # in case path is passed
     "https://zishutron.github.io",
+    "https://zishutron.github.io/Stardust-discord-bot",
     "http://localhost:8080",
     "http://localhost:3000",
     "http://127.0.0.1:8080",
-]
+]))
 
-print(f"[CONFIG] FRONTEND_URL = {FRONTEND_URL}")
+print(f"[CONFIG] FRONTEND_URL  = {FRONTEND_URL}")
 print(f"[CONFIG] OAUTH_REDIRECT = {OAUTH_REDIRECT}")
-print(f"[CONFIG] DATA_DIR = {DATA_DIR}")
+print(f"[CONFIG] DATA_DIR      = {DATA_DIR}")
 
 # ==============================================================================
 # 💾 STORAGE LAYER
@@ -74,6 +74,7 @@ def save_data(name, data):
     except Exception as e:
         print(f"[STORAGE] Failed saving {name}: {e}")
 
+# Named stores
 SERVER_CONFIGS = load_data("server_configurations", {})
 AUTO_RESPONSES = load_data("auto_responses", {})
 BLOCK_LIST     = load_data("block_list", {"words": ["fuck","bitch","asshole","slut","dick","bastard"]})
@@ -84,10 +85,118 @@ def persist_auto_responses(): save_data("auto_responses", AUTO_RESPONSES)
 def persist_block_list():     save_data("block_list", BLOCK_LIST)
 def persist_sessions():       save_data("sessions", SESSIONS)
 
-def guild_cfg(gid):
-    gid = str(gid)
-    SERVER_CONFIGS.setdefault(gid, {})
-    return SERVER_CONFIGS[gid]
+# --------- Default server config (fully customizable) ---------
+DEFAULT_GUILD_CONFIG = {
+    # ---------- Welcome ----------
+    "welcome_enabled": False,
+    "welcome_channel": None,
+    "welcome_message": "Hey {member}, welcome to {server}!",
+    "welcome_use_embed": True,
+    "welcome_embed_title": "Welcome to {server}!",
+    "welcome_embed_description": "We're so happy to have you here, {member}! Grab a coffee, chill, and make new friends.",
+    "welcome_embed_color": "#2F3136",
+    "welcome_embed_image": "https://cdn.discordapp.com/attachments/1515969029708320778/1516977720138006632/CofeeManga__A_Popular_Platform_for_Manga_Enthusiasts.jpg",
+    "welcome_use_card": True,
+    "welcome_mention": True,
+    "welcome_dm": False,
+
+    # ---------- Leave ----------
+    "leave_enabled": False,
+    "leave_channel": None,
+    "leave_message": "{user} has left the server.",
+    "leave_use_embed": True,
+    "leave_embed_title": "Member Left",
+    "leave_embed_description": "{user} has left. We now have {count} members.",
+    "leave_embed_color": "#99AAB5",
+    "leave_embed_image": "",
+    "leave_dm": False,
+
+    # ---------- Booster ----------
+    "booster_enabled": True,
+    "booster_channel": None,
+    "booster_message": "Thank you {user} for boosting {server}!",
+    "booster_use_embed": True,
+    "booster_embed_title": "✨ New Boost!",
+    "booster_embed_description": "Thank you {user}!",
+    "booster_embed_color": "#F47FFF",
+    "booster_embed_image": "",
+    "booster_reward": 10000,
+    "booster_badge": "booster_elite",
+
+    # ---------- AutoMod ----------
+    "automod_enabled": True,
+    "automod_action": "delete_warn",   # "delete", "warn", "delete_warn"
+    "automod_warn_expiry": 4,
+    "automod_ignore_staff": True,
+
+    # ---------- Auto-Responder ----------
+    "autoresponder_enabled": True,
+
+    # ---------- Leveling ----------
+    "level_enabled": True,
+    "level_channel": None,
+    "level_msg": "GG {member}! You reached level **{level}**!",
+    "level_xp_min": 15,
+    "level_xp_max": 25,
+    "level_cooldown": 60,
+    "level_base_xp": 100,
+    "level_multiplier": 1.0,
+    "level_use_card": True,
+    "level_announce_enabled": True,
+
+    # ---------- Economy ----------
+    "economy_enabled": True,
+    "economy_daily_amount": 200,
+    "economy_daily_cooldown": 86400,
+    "economy_reward_channel": None,
+    "economy_reward_chance": 10,      # percent
+    "economy_reward_min": 5000,
+    "economy_reward_max": 75000,
+    "economy_currency_name": "Stardust Coins",
+    "economy_currency_symbol": "🪙",
+
+    # ---------- Tickets ----------
+    "ticket_enabled": False,
+    "ticket_panel_channel": None,
+    "ticket_staff_role": None,
+    "ticket_category": None,
+    "ticket_panel_title": "📩 Help & Support Portal",
+    "ticket_panel_description": "Need assistance? Click the button below to open a private support channel.",
+    "ticket_welcome_title": "🎫 Support Ticket Opened",
+    "ticket_welcome_message": "Welcome {user}! A member of our staff team will be with you shortly. Please describe your issue.",
+    "ticket_auto_ping_staff": True,
+    "ticket_log_channel": None,
+
+    # ---------- Logging ----------
+    "logging_enabled": False,
+    "logging_channel": None,
+    "logging_message_delete": True,
+    "logging_message_edit": True,
+    "logging_member_join": False,
+    "logging_member_leave": False,
+    "logging_voice": True,
+
+    # ---------- Moderation ----------
+    "moderation_dm_on_warn": True,
+
+    # ---------- Custom Commands ----------
+    "custom_commands": {},   # { "trigger": "response" }
+}
+
+def get_guild_cfg(guild_id):
+    """Return a guild config with defaults filled in. Modifies SERVER_CONFIGS in place."""
+    gid = str(guild_id)
+    if gid not in SERVER_CONFIGS:
+        SERVER_CONFIGS[gid] = {}
+    cfg = SERVER_CONFIGS[gid]
+    # Fill defaults for any missing keys
+    for k, v in DEFAULT_GUILD_CONFIG.items():
+        if k not in cfg:
+            cfg[k] = v if not isinstance(v, dict) else dict(v)
+    return cfg
+
+def persist_guild_cfg():
+    persist_server_configs()
 
 # ==============================================================================
 # 🤖 BOT INIT
@@ -101,7 +210,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 XP_COOLDOWN = {}
 
 # ==============================================================================
-# 🎨 RANK TIERS
+# 🎨 RANK TIERS (default — can be overridden later)
 # ==============================================================================
 def get_ff_rank(level):
     if level < 5:  return "🥉 Bronze I"
@@ -129,24 +238,39 @@ def _font(size):
         except Exception: continue
     return ImageFont.load_default()
 
+def _hex_to_rgb(h, default=(47, 49, 54)):
+    if not h: return default
+    h = h.lstrip("#")
+    if len(h) == 3: h = "".join([c*2 for c in h])
+    try:
+        return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+    except Exception:
+        return default
+
+def _safe_format(template, **kwargs):
+    """Safely replace placeholders in a template string."""
+    if not template: return ""
+    out = template
+    for k, v in kwargs.items():
+        out = out.replace("{" + k + "}", str(v))
+    return out
+
 def generate_welcome_card(member):
+    """Legacy static welcome card (used when welcome_use_card is True)."""
     desc = (
         "╭🎈━━━━━━━━━━━━━━━━━━━━━━━━━━╮\n"
         "   ⭐  *𝑾𝒆𝒍𝒄𝒐𝒎𝒆 𝒕𝒐 𝑺𝒕𝒂𝒓𝒅𝒖𝒔𝒕 𝑪𝒂𝒇𝒆!* ⭐\n"
         "╰━━━━━━━━━━━━━━━━━━━━━━━━━━🎈╯\n\n"
         f"𝖧𝖾𝗒 {member.mention}! (⁠◠⁠‿⁠◕⁠)\n\n"
-        "*𝑾𝒆 𝒂𝒓𝒆 𝒔𝒐 𝒉𝒂𝒑𝒑𝒚 𝒕𝒐 𝒉𝒂𝒗𝒆 𝒚𝒐𝒖 𝒉𝒆𝒓𝒆!* (⁠≧⁠▽⁠≦⁠)\n"
-        "*𝑮𝒓𝒂𝒃 𝒂 𝒄𝒖𝒑 𝒐𝒇 𝒄𝒐𝒇𝒇𝒆𝒆, 𝒄𝒉𝒊𝒍𝒍, 𝒂𝒏𝒅 𝒎𝒂𝒌𝒆 𝒏𝒆𝒘 𝒇𝒓𝒊𝒆𝒏𝒅𝒔!* (⁠✯⁠ᴗ⁠✯⁠)\n\n"
-        "📌 𝖣𝗈𝗇'𝗍 𝖿𝗈𝗋𝗀𝖾𝗍 𝗍𝗈 𝖼𝗁𝖾𝖼𝗄 𝗈𝗎𝗋 𝗋𝗎𝗅𝖾𝗌! (⁠◍⁠•⁠ᴗ⁠•⁠◍⁠)\n\n"
+        "*𝑾𝒆 𝒂𝒓𝒆 𝒔𝒐 𝒉𝒂𝒑𝒑𝒚 𝒕𝒐 𝒉𝒂𝒗𝒆 𝒚𝒐𝒖 𝒉𝒆𝒓𝒆!* (⁠≧⁠▽⁠≦⁠)\n\n"
         f"**Identity:** {member.name} | **Member Count:** #{member.guild.member_count}"
     )
-    embed = discord.Embed(description=desc, color=discord.Color.from_rgb(47, 49, 54))
-    embed.set_image(url="https://cdn.discordapp.com/attachments/1515969029708320778/1516977720138006632/CofeeManga__A_Popular_Platform_for_Manga_Enthusiasts.jpg")
-    return embed
+    return discord.Embed(description=desc, color=discord.Color.from_rgb(47, 49, 54))
 
 def generate_rank_card(member, user_data, rank_pos):
     xp = user_data.get("xp", 0); lvl = user_data.get("level", 1)
-    msg_count = user_data.get("messages", 0); next_xp = lvl * 375
+    msg_count = user_data.get("messages", 0)
+    next_xp = lvl * 375
     if lvl >= 50: tier = "Grandmaster"
     elif lvl >= 25: tier = "Elite Vibe"
     elif lvl >= 10: tier = "Gold Member"
@@ -159,8 +283,8 @@ def generate_rank_card(member, user_data, rank_pos):
                            fill=(255,254,252,130), outline=(185,170,150,255), width=3)
     bx1,by1,bx2,by2 = 320,310,900,335
     draw.rounded_rectangle([bx1,by1,bx2,by2], radius=12, fill=(215,205,192,255))
-    progress = min(xp/next_xp,1.0) if next_xp>0 else 1.0
-    if progress>0:
+    progress = min(xp/next_xp, 1.0) if next_xp > 0 else 1.0
+    if progress > 0:
         draw.rounded_rectangle([bx1,by1,bx1+int((bx2-bx1)*progress),by2], radius=12, fill=(84,62,49,255))
     try:
         r = requests.get(member.display_avatar.url, timeout=10)
@@ -205,8 +329,7 @@ def generate_levelup_card(member, new_lvl):
 # ⚙️ UTILITY
 # ==============================================================================
 def parse_duration(s):
-    import re
-    m = re.match(r"(\d+)([smhd])", s.lower().strip())
+    m = re.match(r"(\d+)\s*([smhd])", s.lower().strip())
     if not m: return 0
     n, u = int(m.group(1)), m.group(2)
     return n * {"s":1, "m":60, "h":3600, "d":86400}[u]
@@ -229,15 +352,20 @@ class TicketControlsView(discord.ui.View):
             log += f"[{m.created_at:%Y-%m-%d %H:%M}] {m.author.name}: {m.content}\n"
             for a in m.attachments: log += f"[ATT] {a.url}\n"
         path = f"/tmp/{interaction.channel.name}.txt"
-        with open(path,"w",encoding="utf-8") as f: f.write(log)
-        log_ch = discord.utils.get(interaction.guild.text_channels, name="ticket-logs")
-        if log_ch:
-            try:
-                await log_ch.send(f"📜 Ticket closed by {interaction.user.mention}",
-                                  file=discord.File(path))
+        try:
+            with open(path, "w", encoding="utf-8") as f: f.write(log)
+            cfg = get_guild_cfg(interaction.guild.id)
+            log_ch_id = cfg.get("ticket_log_channel")
+            if log_ch_id:
+                log_ch = interaction.guild.get_channel(int(log_ch_id)) if str(log_ch_id).isdigit() else None
+                if log_ch:
+                    try:
+                        await log_ch.send(f"📜 Ticket closed by {interaction.user.mention}", file=discord.File(path))
+                    except Exception as e: print(f"[TICKET] {e}")
+        except Exception as e: print(f"[TICKET] transcript: {e}")
+        finally:
+            try: os.remove(path)
             except Exception: pass
-        try: os.remove(path)
-        except Exception: pass
         await asyncio.sleep(3)
         try: await interaction.channel.delete()
         except Exception: pass
@@ -252,16 +380,20 @@ class TicketControlsView(discord.ui.View):
         await interaction.response.edit_message(view=self)
         await interaction.channel.send(f"🙋 {interaction.user.mention} claimed this ticket.")
 
+
 class TicketLauncherView(discord.ui.View):
     def __init__(self): super().__init__(timeout=None)
 
     @discord.ui.button(label="📩 Create Ticket", style=discord.ButtonStyle.primary, custom_id="ticket_launcher_btn")
     async def launch(self, interaction, button):
         guild, member = interaction.guild, interaction.user
-        conf = load_data("ticket_config", {}).get(str(guild.id), {})
-        staff_role_id = conf.get("staff_role_id")
-        welcome_title = conf.get("welcome_title", "🎫 Support Ticket Opened")
-        welcome_msg   = conf.get("welcome_msg", "Welcome! Describe your issue.")
+        cfg = get_guild_cfg(guild.id)
+        staff_role_id = cfg.get("ticket_staff_role")
+        category_id = cfg.get("ticket_category")
+        welcome_title = cfg.get("ticket_welcome_title", "🎫 Support Ticket Opened")
+        welcome_msg = cfg.get("ticket_welcome_message", "Welcome! Describe your issue.")
+        auto_ping = cfg.get("ticket_auto_ping_staff", True)
+
         existing = discord.utils.get(guild.text_channels, name=f"🎫-ticket-{member.name.lower()}")
         if existing:
             return await interaction.response.send_message(f"⚠️ Already open: {existing.mention}", ephemeral=True)
@@ -271,18 +403,31 @@ class TicketLauncherView(discord.ui.View):
             member: discord.PermissionOverwrite(read_messages=True, send_messages=True, attach_files=True, embed_links=True),
             guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True)
         }
-        ping = "Staff"
+        ping = ""
         if staff_role_id:
-            role = guild.get_role(int(staff_role_id))
+            role = guild.get_role(int(staff_role_id)) if str(staff_role_id).isdigit() else None
             if role:
                 ow[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True, attach_files=True, embed_links=True)
-                ping = role.mention
+                if auto_ping: ping = role.mention
+        category = None
+        if category_id and str(category_id).isdigit():
+            category = guild.get_channel(int(category_id))
         try:
-            ch = await guild.create_text_channel(f"🎫-ticket-{member.name}", overwrites=ow)
-            embed = discord.Embed(title=welcome_title, description=f"Hey {member.mention},\n\n{welcome_msg}",
-                                  color=discord.Color.blue(), timestamp=discord.utils.utcnow())
+            ch = await guild.create_text_channel(
+                f"🎫-ticket-{member.name}",
+                overwrites=ow,
+                category=category if isinstance(category, discord.CategoryChannel) else None
+            )
+            embed = discord.Embed(
+                title=welcome_title,
+                description=_safe_format(welcome_msg, user=member.mention, server=guild.name),
+                color=discord.Color.blue(),
+                timestamp=discord.utils.utcnow()
+            )
             embed.set_footer(text=f"Requested by {member.display_name}")
-            await ch.send(content=f"{member.mention} | {ping}", embed=embed, view=TicketControlsView(owner_id=member.id))
+            content = f"{member.mention}"
+            if ping: content += f" | {ping}"
+            await ch.send(content=content, embed=embed, view=TicketControlsView(owner_id=member.id))
             await interaction.edit_original_response(content=f"🚀 Ticket: {ch.mention}")
         except Exception as e:
             await interaction.edit_original_response(content=f"❌ {e}")
@@ -298,6 +443,7 @@ async def reward_coins(user_id, amount):
     eco[uid]["balance"] += amount
     save_data("economy", eco)
 
+
 class RPSView(discord.ui.View):
     def __init__(self, p1, p2=None):
         super().__init__(timeout=60)
@@ -307,7 +453,6 @@ class RPSView(discord.ui.View):
     async def resolve(self, interaction):
         c1 = self.choices[self.p1.id]
         c2 = self.choices.get(self.p2.id) if self.p2 else random.choice(["rock","paper","scissors"])
-        p2_name = self.p2.display_name if self.p2 else "Stardust Bot"
         msg = f"🪨 **RPS Results**\n{self.p1.mention} → **{c1.upper()}**\n"
         msg += f"{self.p2.mention if self.p2 else '🤖 Bot'} → **{c2.upper()}**\n\n"
         if c1 == c2:
@@ -341,6 +486,7 @@ class RPSView(discord.ui.View):
     async def paper(self, i, b): await self.pick(i, "paper")
     @discord.ui.button(label="Scissors ✂️", style=discord.ButtonStyle.danger, custom_id="rps_scissors")
     async def scissors(self, i, b): await self.pick(i, "scissors")
+
 
 class TTTButton(discord.ui.Button):
     def __init__(self, x, y):
@@ -385,6 +531,7 @@ class TTTButton(discord.ui.Button):
                     content = f"Your turn: {v.p1.mention}"
         await interaction.response.edit_message(content=content, view=v)
 
+
 class TTTView(discord.ui.View):
     def __init__(self, p1, p2=None):
         super().__init__(timeout=180)
@@ -412,6 +559,7 @@ class TTTView(discord.ui.View):
             for c in self.children:
                 if isinstance(c, discord.ui.Button) and c.x==x and c.y==y:
                     c.label, c.style, c.disabled = "⭕", discord.ButtonStyle.success, True
+
 
 class SlapView(discord.ui.View):
     def __init__(self, p1, p2=None):
@@ -452,6 +600,21 @@ class SlapView(discord.ui.View):
         status = f"\n❤️ {self.p1.mention}: `{self.hp1}/100`\n💙 {p2n}: `{self.hp2}/100`\n\n👉 Turn: {self.turn.mention if self.p2 else self.p1.mention}"
         await interaction.response.edit_message(content=log+status, view=self)
 
+
+# ==============================================================================
+# 📜 LOGGING HELPERS
+# ==============================================================================
+async def send_log(guild, event_type, embed):
+    cfg = get_guild_cfg(guild.id)
+    if not cfg.get("logging_enabled"): return
+    if not cfg.get(f"logging_{event_type}", True): return
+    ch_id = cfg.get("logging_channel")
+    if not ch_id: return
+    ch = guild.get_channel(int(ch_id)) if str(ch_id).isdigit() else None
+    if not ch: return
+    try: await ch.send(embed=embed)
+    except Exception as e: print(f"[LOG] {e}")
+
 # ==============================================================================
 # 🎯 BOT EVENTS
 # ==============================================================================
@@ -472,50 +635,78 @@ async def on_ready():
     if not reminder_checker_loop.is_running():
         reminder_checker_loop.start()
 
+
 # --------- UNIFIED on_message ---------
 @bot.event
 async def on_message(message):
     if message.author.bot or not message.guild: return
     g_id = str(message.guild.id)
+    cfg = get_guild_cfg(g_id)
 
     # AFK
     afk = load_data("afk", {})
     auid = str(message.author.id)
     if auid in afk:
         del afk[auid]; save_data("afk", afk)
-        try: await message.channel.send(embed=discord.Embed(description=f"✨ Welcome back {message.author.mention}!", color=0xF5EAE1), delete_after=5)
+        try:
+            await message.channel.send(embed=discord.Embed(
+                description=f"✨ Welcome back {message.author.mention}!", color=0xF5EAE1), delete_after=5)
         except Exception: pass
     for u in message.mentions:
         uid = str(u.id)
         if uid in afk:
-            try: await message.channel.send(embed=discord.Embed(description=f"💤 {u.name} is AFK: `{afk[uid]}`", color=0xF5EAE1), delete_after=7)
+            try:
+                await message.channel.send(embed=discord.Embed(
+                    description=f"💤 {u.name} is AFK: `{afk[uid]}`", color=0xF5EAE1), delete_after=7)
             except Exception: pass
 
-    # Auto-responder
-    if g_id in AUTO_RESPONSES:
+    # 1. CUSTOM COMMANDS (per-server user-defined)
+    if cfg.get("custom_commands"):
+        clean = message.content.lower().strip()
+        if clean in cfg["custom_commands"]:
+            try:
+                await message.channel.send(cfg["custom_commands"][clean])
+            except Exception as e:
+                print(f"[CUSTOM_CMD] {e}")
+            return
+
+    # 2. AUTO-RESPONDER
+    if cfg.get("autoresponder_enabled", True) and g_id in AUTO_RESPONSES:
         clean = message.content.lower().strip()
         if clean in AUTO_RESPONSES[g_id]:
             await message.channel.send(AUTO_RESPONSES[g_id][clean])
             return
 
-    # AutoMod
-    if SERVER_CONFIGS.get(g_id, {}).get("automod_enabled", True):
-        clean = message.content.lower().strip()
-        for w in BLOCK_LIST.get("words", []):
-            if w and w in clean:
-                try:
-                    await message.delete()
-                    alert = discord.Embed(title="🛡️ System Shield",
-                                          description=f"⚠️ {message.author.mention}, blocked word detected.",
-                                          color=discord.Color.from_rgb(255,99,71))
-                    wm = await message.channel.send(embed=alert)
-                    await asyncio.sleep(4)
-                    try: await wm.delete()
-                    except Exception: pass
-                except Exception as e: print(f"[AUTOMOD] {e}")
-                return
+    # 3. AUTOMOD
+    if cfg.get("automod_enabled", True):
+        is_staff = False
+        if cfg.get("automod_ignore_staff", True):
+            try:
+                is_staff = message.author.guild_permissions.manage_messages
+            except Exception:
+                is_staff = False
+        if not is_staff:
+            clean = message.content.lower().strip()
+            for w in BLOCK_LIST.get("words", []):
+                if w and w in clean:
+                    action = cfg.get("automod_action", "delete_warn")
+                    try:
+                        if action in ("delete", "delete_warn"):
+                            await message.delete()
+                        if action in ("warn", "delete_warn"):
+                            alert = discord.Embed(
+                                title="🛡️ System Shield",
+                                description=f"⚠️ {message.author.mention}, blocked word detected.",
+                                color=discord.Color.from_rgb(255,99,71))
+                            wm = await message.channel.send(embed=alert)
+                            expiry = cfg.get("automod_warn_expiry", 4)
+                            await asyncio.sleep(expiry)
+                            try: await wm.delete()
+                            except Exception: pass
+                    except Exception as e: print(f"[AUTOMOD] {e}")
+                    return
 
-    # Anime $m/$w
+    # 4. Anime $m/$w
     content = message.content.strip().lower()
     if content in ("$m","$w"):
         pool = ANIME_MALES if content == "$m" else ANIME_FEMALES
@@ -533,50 +724,73 @@ async def on_message(message):
                 db = load_data("marriage", {})
                 db.setdefault(str(u.id), []).append(char["name"])
                 save_data("marriage", db)
-                await bm.channel.send(embed=discord.Embed(title="💖 Married!",
-                    description=f"🎉 {u.mention} claimed **{char['name']}**!", color=discord.Color.magenta()))
+                await bm.channel.send(embed=discord.Embed(
+                    title="💖 Married!",
+                    description=f"🎉 {u.mention} claimed **{char['name']}**!",
+                    color=discord.Color.magenta()))
             except asyncio.TimeoutError: pass
         asyncio.create_task(wait_claim())
         return
 
-    # Economy + XP
+    # 5. Economy + XP
     try:
         uid = str(message.author.id)
         eco = load_data("economy", {})
         eco.setdefault(uid, {"balance":0, "last_daily":0, "inventory":[], "messages":0})
         eco[uid]["messages"] = eco[uid].get("messages", 0) + 1
 
-        now = time.time()
-        if uid not in XP_COOLDOWN or (now - XP_COOLDOWN[uid]) > 60:
-            XP_COOLDOWN[uid] = now
-            ranks = load_data("rank_config", {})
-            ranks.setdefault(uid, {"xp":0, "level":1})
-            ranks[uid]["xp"] += random.randint(15,25)
-            need = ranks[uid]["level"] * 100
-            if ranks[uid]["xp"] >= need:
-                ranks[uid]["xp"] -= need
-                ranks[uid]["level"] += 1
-                new_lvl = ranks[uid]["level"]
-                ch_id = SERVER_CONFIGS.get(g_id, {}).get("level_channel")
-                if ch_id:
-                    ch = message.guild.get_channel(ch_id)
-                    if ch:
-                        try:
-                            fp = generate_levelup_card(message.author, new_lvl)
-                            msg = SERVER_CONFIGS.get(g_id, {}).get("level_msg", "GG {member}!").format(member=message.author.mention)
-                            await ch.send(content=msg, file=discord.File(fp, "levelup.png"))
-                        except Exception as e: print(f"[LVLUP] {e}")
-            save_data("rank_config", ranks)
+        # Leveling
+        if cfg.get("level_enabled", True):
+            now = time.time()
+            cooldown = cfg.get("level_cooldown", 60)
+            if uid not in XP_COOLDOWN or (now - XP_COOLDOWN[uid]) > cooldown:
+                XP_COOLDOWN[uid] = now
+                ranks = load_data("rank_config", {})
+                ranks.setdefault(uid, {"xp":0, "level":1})
+                xp_min = cfg.get("level_xp_min", 15)
+                xp_max = cfg.get("level_xp_max", 25)
+                xp_gain = random.randint(xp_min, xp_max)
+                multiplier = float(cfg.get("level_multiplier", 1.0))
+                xp_gain = int(xp_gain * multiplier)
+                ranks[uid]["xp"] += xp_gain
+                base_xp = cfg.get("level_base_xp", 100)
+                need = ranks[uid]["level"] * base_xp
+                if ranks[uid]["xp"] >= need:
+                    ranks[uid]["xp"] -= need
+                    ranks[uid]["level"] += 1
+                    new_lvl = ranks[uid]["level"]
+                    ch_id = cfg.get("level_channel")
+                    announce = cfg.get("level_announce_enabled", True)
+                    if ch_id and announce:
+                        ch = message.guild.get_channel(int(ch_id)) if str(ch_id).isdigit() else None
+                        if ch:
+                            try:
+                                custom = cfg.get("level_msg", "GG {member}!").format(
+                                    member=message.author.mention, level=new_lvl
+                                )
+                                if cfg.get("level_use_card", True):
+                                    fp = generate_levelup_card(message.author, new_lvl)
+                                    await ch.send(content=custom, file=discord.File(fp, "levelup.png"))
+                                else:
+                                    await ch.send(content=custom)
+                            except Exception as e: print(f"[LVLUP] {e}")
+                save_data("rank_config", ranks)
 
-        if random.random() < 0.10:
-            rc = SERVER_CONFIGS.get(g_id, {}).get("reward_channel")
-            if rc:
-                ch = message.guild.get_channel(rc)
+        # Economy reward
+        if cfg.get("economy_enabled", True):
+            reward_ch = cfg.get("economy_reward_channel")
+            chance = cfg.get("economy_reward_chance", 10)
+            if reward_ch and random.random() < (chance / 100.0):
+                ch = message.guild.get_channel(int(reward_ch)) if str(reward_ch).isdigit() else None
                 if ch:
-                    amt = random.randint(5000, 75000)
+                    lo = cfg.get("economy_reward_min", 5000)
+                    hi = cfg.get("economy_reward_max", 75000)
+                    amt = random.randint(min(lo,hi), max(lo,hi))
                     eco[uid]["balance"] += amt
+                    sym = cfg.get("economy_currency_symbol", "🪙")
                     emb = discord.Embed(title="✨ lucky", color=discord.Color.from_rgb(241,196,15))
-                    emb.description = f"{message.author.mention}\n\n**+${amt:,}**\n\n*chat wage* · *lvl {ranks.get(uid,{}).get('level',1)}*"
+                    emb.description = (f"{message.author.mention}\n\n**+{sym}{amt:,}**\n\n"
+                                       f"*chat wage* · *lvl {ranks.get(uid,{}).get('level',1)}*")
                     await ch.send(content=message.author.mention, embed=emb)
         save_data("economy", eco)
     except Exception as e:
@@ -584,127 +798,284 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-# --------- on_member_join ---------
+
+# --------- on_member_join (FULLY CUSTOMIZABLE) ---------
 @bot.event
 async def on_member_join(member):
-    cfg = SERVER_CONFIGS.get(str(member.guild.id), {})
-    cid = cfg.get("channel")
-    if cid:
-        ch = member.guild.get_channel(cid)
-        if ch:
-            try: await ch.send(content=f"Welcome {member.mention}!", embed=generate_welcome_card(member))
-            except Exception as e: print(f"[WELCOME] {e}")
+    cfg = get_guild_cfg(member.guild.id)
 
-# --------- on_member_remove ---------
+    # Welcome
+    if cfg.get("welcome_enabled"):
+        ch_id = cfg.get("welcome_channel")
+        ch = member.guild.get_channel(int(ch_id)) if str(ch_id or "").isdigit() else None
+        if ch:
+            try:
+                msg_template = cfg.get("welcome_message", "")
+                content = _safe_format(msg_template, member=member.mention, user=member.mention,
+                                       server=member.guild.name, name=member.name,
+                                       count=member.guild.member_count) if msg_template else ""
+                if not cfg.get("welcome_mention", True) and content:
+                    content = content.replace(member.mention, member.name)
+
+                if cfg.get("welcome_use_embed"):
+                    col = _hex_to_rgb(cfg.get("welcome_embed_color"), (47,49,54))
+                    title = _safe_format(cfg.get("welcome_embed_title",""), member=member.mention, server=member.guild.name, name=member.name, count=member.guild.member_count)
+                    desc = _safe_format(cfg.get("welcome_embed_description",""), member=member.mention, server=member.guild.name, name=member.name, count=member.guild.member_count)
+                    emb = discord.Embed(
+                        title=title or None,
+                        description=desc or None,
+                        color=discord.Color.from_rgb(*col)
+                    )
+                    img = cfg.get("welcome_embed_image")
+                    if img and str(img).startswith("http"):
+                        emb.set_image(url=img)
+                    emb.set_thumbnail(url=member.display_avatar.url)
+                    await ch.send(content=content or None, embed=emb)
+                else:
+                    if cfg.get("welcome_use_card"):
+                        await ch.send(content=content or None, embed=generate_welcome_card(member))
+                    else:
+                        await ch.send(content=content or f"Welcome {member.mention}!")
+            except Exception as e:
+                print(f"[WELCOME] {e}")
+
+        # DM
+        if cfg.get("welcome_dm"):
+            try:
+                dm_emb = discord.Embed(
+                    title=f"Welcome to {member.guild.name}!",
+                    description=_safe_format(cfg.get("welcome_embed_description",""), member=member.mention, server=member.guild.name, name=member.name, count=member.guild.member_count),
+                    color=discord.Color.from_rgb(*_hex_to_rgb(cfg.get("welcome_embed_color")))
+                )
+                await member.send(embed=dm_emb)
+            except Exception: pass
+
+
+# --------- on_member_remove (FULLY CUSTOMIZABLE) ---------
 @bot.event
 async def on_member_remove(member):
-    gid = str(member.guild.id)
-    cfg = SERVER_CONFIGS.get(gid, {})
-    cid = cfg.get("channel")
-    if cid:
-        ch = member.guild.get_channel(cid)
-        if ch:
-            try:
-                await ch.send(embed=discord.Embed(
-                    description=f"💔 **{member.name}** left. Total: {member.guild.member_count}.",
-                    color=discord.Color.dark_gray()))
-            except Exception: pass
-    lc = load_data("leave_config", {}).get(gid, {})
-    lcid = lc.get("channel_id")
-    if lcid:
-        lch = member.guild.get_channel(lcid)
-        if lch:
-            msg = lc.get("custom_message", "has terminated their connection.")
-            formatted = msg.replace("{user}", member.mention).replace("{server}", member.guild.name)
-            try:
-                e = discord.Embed(title="🚪 Connection Disconnected",
-                                  description=f"{formatted}\n\n**Identity:** {member.name}",
-                                  color=0xF5EAE1)
-                e.add_field(name="Remaining", value=f"`{member.guild.member_count}` members")
-                e.set_thumbnail(url=member.display_avatar.url)
-                await lch.send(content=f"⚠️ {member.mention}", embed=e)
-            except Exception: pass
+    cfg = get_guild_cfg(member.guild.id)
+    if not cfg.get("leave_enabled"): return
+    ch_id = cfg.get("leave_channel")
+    ch = member.guild.get_channel(int(ch_id)) if str(ch_id or "").isdigit() else None
+    if not ch: return
+    try:
+        content = _safe_format(
+            cfg.get("leave_message",""),
+            user=member.mention, member=member.mention,
+            name=member.name, server=member.guild.name,
+            count=member.guild.member_count
+        )
+        if cfg.get("leave_use_embed"):
+            col = _hex_to_rgb(cfg.get("leave_embed_color"), (153,170,181))
+            title = _safe_format(cfg.get("leave_embed_title",""), user=member.mention, name=member.name, server=member.guild.name, count=member.guild.member_count)
+            desc = _safe_format(cfg.get("leave_embed_description",""), user=member.mention, name=member.name, server=member.guild.name, count=member.guild.member_count)
+            emb = discord.Embed(
+                title=title or None,
+                description=desc or None,
+                color=discord.Color.from_rgb(*col)
+            )
+            img = cfg.get("leave_embed_image")
+            if img and str(img).startswith("http"):
+                emb.set_image(url=img)
+            emb.set_thumbnail(url=member.display_avatar.url)
+            await ch.send(content=content or None, embed=emb)
+        else:
+            await ch.send(content=content or f"{member.name} left.")
+    except Exception as e:
+        print(f"[LEAVE] {e}")
 
-# --------- on_member_update (boost) ---------
+
+# --------- on_member_update (BOOSTER, FULLY CUSTOMIZABLE) ---------
 @bot.event
 async def on_member_update(before, after):
     if not before.premium_since and after.premium_since:
+        cfg = get_guild_cfg(after.guild.id)
+        if not cfg.get("booster_enabled", True): return
+
+        # Give coins
         uid = str(after.id)
+        reward = cfg.get("booster_reward", 10000)
+        badge = cfg.get("booster_badge", "booster_elite")
         eco = load_data("economy", {})
         eco.setdefault(uid, {"balance":0, "last_daily":0, "inventory":[], "messages":0})
-        eco[uid]["balance"] += 10000
-        if "booster_elite" not in eco[uid]["inventory"]:
-            eco[uid]["inventory"].append("booster_elite")
+        if reward:
+            eco[uid]["balance"] += reward
+        if badge and badge not in eco[uid]["inventory"]:
+            eco[uid]["inventory"].append(badge)
         save_data("economy", eco)
-        ch = after.guild.system_channel or (after.guild.text_channels[0] if after.guild.text_channels else None)
+
+        # Announce
+        ch_id = cfg.get("booster_channel")
+        ch = None
+        if ch_id and str(ch_id).isdigit():
+            ch = after.guild.get_channel(int(ch_id))
+        if not ch:
+            ch = after.guild.system_channel or (after.guild.text_channels[0] if after.guild.text_channels else None)
         if ch:
             try:
-                await ch.send(embed=discord.Embed(title="✨ BOOST DETECTED ✨",
-                    description=f"💖 Thank you {after.mention}!\n🎁 +10,000 coins + Booster badge!",
-                    color=discord.Color.from_rgb(244,127,255)))
-            except Exception: pass
+                content = _safe_format(cfg.get("booster_message",""), user=after.mention, name=after.name, server=after.guild.name)
+                if cfg.get("booster_use_embed"):
+                    col = _hex_to_rgb(cfg.get("booster_embed_color"), (244,127,255))
+                    emb = discord.Embed(
+                        title=_safe_format(cfg.get("booster_embed_title",""), user=after.mention, name=after.name),
+                        description=_safe_format(cfg.get("booster_embed_description",""), user=after.mention, name=after.name, server=after.guild.name),
+                        color=discord.Color.from_rgb(*col)
+                    )
+                    img = cfg.get("booster_embed_image")
+                    if img and str(img).startswith("http"):
+                        emb.set_image(url=img)
+                    emb.set_thumbnail(url=after.display_avatar.url)
+                    await ch.send(content=content or None, embed=emb)
+                else:
+                    await ch.send(content=content or f"Thank you {after.mention}!")
+            except Exception as e:
+                print(f"[BOOSTER] {e}")
+
+
+# --------- on_message_delete ---------
+@bot.event
+async def on_message_delete(message):
+    if message.author.bot or not message.guild: return
+    emb = discord.Embed(
+        title="🗑️ Message Deleted",
+        description=f"**Author:** {message.author.mention}\n**Channel:** {message.channel.mention}\n\n📝 {message.content or '*[no text]*'}",
+        color=discord.Color.red()
+    )
+    emb.set_footer(text=f"ID: {message.id}")
+    emb.timestamp = discord.utils.utcnow()
+    await send_log(message.guild, "message_delete", emb)
+
+
+# --------- on_message_edit ---------
+@bot.event
+async def on_message_edit(before, after):
+    if before.author.bot or not before.guild or before.content == after.content: return
+    emb = discord.Embed(
+        title="✏️ Message Edited",
+        description=f"**Author:** {before.author.mention}\n**Channel:** {before.channel.mention}\n🔗 [Jump]({after.jump_url})",
+        color=discord.Color.orange()
+    )
+    emb.add_field(name="Before", value=before.content or "*empty*", inline=False)
+    emb.add_field(name="After", value=after.content or "*empty*", inline=False)
+    emb.timestamp = discord.utils.utcnow()
+    await send_log(before.guild, "message_edit", emb)
+
+
+# --------- on_voice_state_update ---------
+@bot.event
+async def on_voice_state_update(member, before, after):
+    if member.bot: return
+    emb = discord.Embed(color=discord.Color.blue()).set_author(name=member.display_name, icon_url=member.display_avatar.url)
+    emb.timestamp = discord.utils.utcnow()
+    if not before.channel and after.channel:
+        emb.title = "🔊 Voice Joined"
+        emb.description = f"{member.mention} joined **{after.channel.name}**"
+    elif before.channel and not after.channel:
+        emb.title = "🔇 Voice Left"
+        emb.description = f"{member.mention} left **{before.channel.name}**"
+    elif before.channel and after.channel and before.channel.id != after.channel.id:
+        emb.title = "🔀 Voice Switched"
+        emb.description = f"{member.mention} moved to **{after.channel.name}**"
+    else:
+        return
+    await send_log(member.guild, "voice", emb)
+
 
 # ==============================================================================
-# 🎬 SLASH COMMANDS — WELCOME / REWARD / LEVEL
+# 🎬 SLASH COMMANDS — WELCOME
 # ==============================================================================
 @bot.tree.command(name="welcome-set", description="⚙️ Map greeting system to a channel")
 @app_commands.checks.has_permissions(administrator=True)
 async def welcome_set(i, channel: discord.TextChannel):
-    cfg = guild_cfg(i.guild.id); cfg["channel"] = channel.id
-    persist_server_configs()
+    cfg = get_guild_cfg(i.guild.id)
+    cfg["welcome_channel"] = str(channel.id)
+    cfg["welcome_enabled"] = True
+    persist_guild_cfg()
     await i.response.send_message(embed=discord.Embed(description=f"✅ Welcome → {channel.mention}", color=0x57F287))
 
 @bot.tree.command(name="welcome-reset", description="❌ Wipe welcome module")
 @app_commands.checks.has_permissions(administrator=True)
 async def welcome_reset(i):
-    cfg = guild_cfg(i.guild.id); cfg.pop("channel", None); persist_server_configs()
-    await i.response.send_message("Welcome cleared.")
+    cfg = get_guild_cfg(i.guild.id)
+    cfg["welcome_enabled"] = False
+    cfg["welcome_channel"] = None
+    persist_guild_cfg()
+    await i.response.send_message("Welcome disabled.")
 
 @bot.tree.command(name="welcome-test", description="🧪 Test welcome card")
 @app_commands.checks.has_permissions(administrator=True)
 async def welcome_test(i):
-    cid = SERVER_CONFIGS.get(str(i.guild.id), {}).get("channel")
-    if not cid: return await i.response.send_message("Set welcome channel first.", ephemeral=True)
-    ch = i.guild.get_channel(cid)
-    if ch:
-        await ch.send(content=f"Welcome {i.user.mention}!", embed=generate_welcome_card(i.user))
-        await i.response.send_message("✅ Sent.", ephemeral=True)
+    cfg = get_guild_cfg(i.guild.id)
+    ch_id = cfg.get("welcome_channel")
+    ch = i.guild.get_channel(int(ch_id)) if str(ch_id or "").isdigit() else None
+    if not ch: return await i.response.send_message("Welcome channel not set.", ephemeral=True)
+    content = _safe_format(cfg.get("welcome_message",""), member=i.user.mention, server=i.guild.name, name=i.user.name, count=i.guild.member_count)
+    emb = None
+    if cfg.get("welcome_use_embed"):
+        emb = discord.Embed(
+            title=_safe_format(cfg.get("welcome_embed_title",""), member=i.user.mention, server=i.guild.name),
+            description=_safe_format(cfg.get("welcome_embed_description",""), member=i.user.mention, server=i.guild.name, name=i.user.name, count=i.guild.member_count),
+            color=discord.Color.from_rgb(*_hex_to_rgb(cfg.get("welcome_embed_color")))
+        )
+        img = cfg.get("welcome_embed_image")
+        if img and str(img).startswith("http"): emb.set_image(url=img)
+    await ch.send(content=content or None, embed=emb)
+    await i.response.send_message("✅ Sent.", ephemeral=True)
 
+
+# ==============================================================================
+# 🎬 SLASH COMMANDS — ECONOMY
+# ==============================================================================
 @bot.tree.command(name="reward-set", description="💰 Set reward channel")
 @app_commands.checks.has_permissions(administrator=True)
 async def reward_set(i, channel: discord.TextChannel):
-    cfg = guild_cfg(i.guild.id); cfg["reward_channel"] = channel.id; persist_server_configs()
+    cfg = get_guild_cfg(i.guild.id)
+    cfg["economy_reward_channel"] = str(channel.id)
+    persist_guild_cfg()
     await i.response.send_message(f"✅ Rewards → {channel.mention}")
 
 @bot.tree.command(name="reward-reset", description="❌ Wipe reward module")
 @app_commands.checks.has_permissions(administrator=True)
 async def reward_reset(i):
-    cfg = guild_cfg(i.guild.id); cfg.pop("reward_channel", None); persist_server_configs()
+    cfg = get_guild_cfg(i.guild.id)
+    cfg["economy_reward_channel"] = None
+    persist_guild_cfg()
     await i.response.send_message("Reward system off.")
 
 @bot.tree.command(name="reward-test", description="🧪 Test reward")
 @app_commands.checks.has_permissions(administrator=True)
 async def reward_test(i):
-    cid = SERVER_CONFIGS.get(str(i.guild.id), {}).get("reward_channel")
-    if not cid: return await i.response.send_message("Set reward channel first.", ephemeral=True)
-    ch = i.guild.get_channel(cid)
-    if ch:
-        amt = random.randint(5000,75000)
-        emb = discord.Embed(title="✨ lucky (TEST)", color=discord.Color.from_rgb(241,196,15))
-        emb.description = f"{i.user.mention}\n\n**+${amt:,}**\n\n*chat wage*"
-        await ch.send(content=i.user.mention, embed=emb)
-        await i.response.send_message("✅ Sent.", ephemeral=True)
+    cfg = get_guild_cfg(i.guild.id)
+    ch_id = cfg.get("economy_reward_channel")
+    ch = i.guild.get_channel(int(ch_id)) if str(ch_id or "").isdigit() else None
+    if not ch: return await i.response.send_message("Reward channel not set.", ephemeral=True)
+    lo = cfg.get("economy_reward_min", 5000); hi = cfg.get("economy_reward_max", 75000)
+    amt = random.randint(min(lo,hi), max(lo,hi))
+    sym = cfg.get("economy_currency_symbol", "🪙")
+    emb = discord.Embed(title="✨ lucky (TEST)", color=discord.Color.from_rgb(241,196,15))
+    emb.description = f"{i.user.mention}\n\n**+{sym}{amt:,}**\n\n*chat wage*"
+    await ch.send(content=i.user.mention, embed=emb)
+    await i.response.send_message("✅ Sent.", ephemeral=True)
 
+
+# ==============================================================================
+# 🎬 SLASH COMMANDS — LEVEL
+# ==============================================================================
 @bot.tree.command(name="level-set-channel", description="📊 Set level-up channel")
 @app_commands.checks.has_permissions(administrator=True)
 async def lvlch(i, channel: discord.TextChannel):
-    cfg = guild_cfg(i.guild.id); cfg["level_channel"] = channel.id; persist_server_configs()
+    cfg = get_guild_cfg(i.guild.id)
+    cfg["level_channel"] = str(channel.id)
+    persist_guild_cfg()
     await i.response.send_message(f"✅ Level up → {channel.mention}", ephemeral=True)
 
 @bot.tree.command(name="level-set-msg", description="💬 Custom level-up message")
 @app_commands.checks.has_permissions(administrator=True)
 async def lvlmsg(i, message: str):
-    cfg = guild_cfg(i.guild.id); cfg["level_msg"] = message; persist_server_configs()
+    cfg = get_guild_cfg(i.guild.id)
+    cfg["level_msg"] = message
+    persist_guild_cfg()
     await i.response.send_message(f"✅ Updated: `{message}`", ephemeral=True)
 
 @bot.tree.command(name="rank", description="💳 Display your rank card")
@@ -724,6 +1095,7 @@ async def rank(i, member: discord.Member = None):
     pos = next((idx+1 for idx, (u, _) in enumerate(su) if u == uid), 1)
     fp = generate_rank_card(t, ud, pos)
     await i.followup.send(file=discord.File(fp, "rank.png"))
+
 
 # ==============================================================================
 # 🛡️ MODERATION
@@ -763,16 +1135,18 @@ async def warn(i, member: discord.Member, reason: str):
     if member.id == i.user.id: return await i.response.send_message("Can't warn yourself.", ephemeral=True)
     if member.bot: return await i.response.send_message("Can't warn a bot.", ephemeral=True)
     await i.response.defer()
+    cfg = get_guild_cfg(i.guild.id)
     emb = discord.Embed(title="⚠️ Member Warned",
         description=f"**User:** {member.mention}\n**Reason:** {reason}\n**By:** {i.user.mention}",
         color=0xFF8C00)
     emb.timestamp = discord.utils.utcnow()
     await i.followup.send(embed=emb)
-    try:
-        dm = discord.Embed(title=f"⚠️ Warning from {i.guild.name}",
-            description=f"You received a warning.\n\n**Reason:** {reason}", color=0xFF8C00)
-        await member.send(embed=dm)
-    except Exception: pass
+    if cfg.get("moderation_dm_on_warn", True):
+        try:
+            dm = discord.Embed(title=f"⚠️ Warning from {i.guild.name}",
+                description=f"You received a warning.\n\n**Reason:** {reason}", color=0xFF8C00)
+            await member.send(embed=dm)
+        except Exception: pass
 
 @bot.tree.command(name="addrole", description="➕ Add a role to a member")
 @commands.has_permissions(manage_roles=True)
@@ -798,8 +1172,9 @@ async def removerole(i, member: discord.Member, role: discord.Role):
             description=f"{role.mention} ← **{member.display_name}**", color=0xED4245))
     except discord.Forbidden: await i.followup.send("❌ No permission.", ephemeral=True)
 
+
 # ==============================================================================
-# ☕ SERVE + ANIME
+# ☕ SERVE + MENU + SHOP
 # ==============================================================================
 MENU = {
     "coffee":     {"title":"BARISTA ESPRESSO","item_name":"Premium Barista Coffee","origin":"Milan, Italy 🇮🇹","line":"Rich espresso with velvety crema.","price":50},
@@ -843,6 +1218,10 @@ async def serve(i, item: str, member: discord.Member):
     emb.set_footer(text=f"Balance: {eco[uid]['balance']} coins")
     await i.followup.send(content=f"🛎️ {member.mention}, served!", embed=emb)
 
+
+# ==============================================================================
+# 🎭 ANIME COMMANDS
+# ==============================================================================
 ANIME_MALES = [
     {"name": "Levi Ackerman", "anime": "Attack on Titan", "image": "https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=500"},
     {"name": "Gojo Satoru", "anime": "Jujutsu Kaisen", "image": "https://images.unsplash.com/photo-1578632767115-351597cf2477?w=500"},
@@ -875,8 +1254,9 @@ _anime_cmd("slap","💢 Ouch!","SLAPS","across the face!",
            discord.Color.red(),
            "https://media.giphy.com/media/Zau0yrl17uzdK/giphy.gif")
 
+
 # ==============================================================================
-# 💰 ECONOMY
+# 💰 ECONOMY COMMANDS
 # ==============================================================================
 SHOP_ITEMS = {
     "nebula_kitten":  {"price":1200, "type":"Pet","display":"🐱 Nebula Kitten","desc":"Floating space kitty."},
@@ -890,28 +1270,36 @@ SHOP_ITEMS = {
 @bot.tree.command(name="daily", description="🎁 Claim daily reward")
 async def daily(i):
     await i.response.defer()
+    cfg = get_guild_cfg(i.guild.id)
     uid = str(i.user.id)
     eco = load_data("economy", {})
     eco.setdefault(uid, {"balance":0, "last_daily":0, "inventory":[], "messages":0})
+    amount = cfg.get("economy_daily_amount", 200)
+    cooldown = cfg.get("economy_daily_cooldown", 86400)
     now = int(time.time())
-    if now - eco[uid].get("last_daily", 0) < 86400:
-        rem = 86400 - (now - eco[uid].get("last_daily", 0))
+    elapsed = now - eco[uid].get("last_daily", 0)
+    if elapsed < cooldown:
+        rem = cooldown - elapsed
         return await i.followup.send(embed=discord.Embed(title="⏳ Cooldown",
             description=f"Wait `{rem//3600}h {(rem%3600)//60}m`.", color=0xF5EAE1))
-    eco[uid]["balance"] += 200
+    eco[uid]["balance"] += amount
     eco[uid]["last_daily"] = now
     save_data("economy", eco)
+    sym = cfg.get("economy_currency_symbol", "🪙")
     await i.followup.send(embed=discord.Embed(title="🌟 DAILY BONUS",
-        description=f"🎁 +**200 coins**\n💳 Balance: `{eco[uid]['balance']}`", color=0xF5EAE1))
+        description=f"🎁 +**{sym}{amount:,}**\n💳 Balance: `{eco[uid]['balance']:,}`", color=0xF5EAE1))
 
 @bot.tree.command(name="wallet", description="💳 View your balance")
 async def wallet(i):
     await i.response.defer()
+    cfg = get_guild_cfg(i.guild.id)
     uid = str(i.user.id)
     eco = load_data("economy", {})
     eco.setdefault(uid, {"balance":0, "last_daily":0, "inventory":[], "messages":0})
-    await i.followup.send(embed=discord.Embed(title="💳 Stardust Vault",
-        description=f"👤 {i.user.mention}\n\n🪙 **Balance:** `{eco[uid]['balance']}` coins",
+    sym = cfg.get("economy_currency_symbol", "🪙")
+    cur = cfg.get("economy_currency_name", "Stardust Coins")
+    await i.followup.send(embed=discord.Embed(title="💳 Wallet",
+        description=f"👤 {i.user.mention}\n\n{sym} **Balance:** `{eco[uid]['balance']:,}` {cur}",
         color=0xF5EAE1))
 
 @bot.tree.command(name="menu", description="📜 Global menu card")
@@ -927,8 +1315,7 @@ async def menu(i):
 
 @bot.tree.command(name="shop", description="🛒 Browse Stardust shop")
 async def shop(i):
-    emb = discord.Embed(title="🌟 STARDUST SHOP",
-        description="Use `/buy <item_id>`.", color=0x9370DB)
+    emb = discord.Embed(title="🌟 STARDUST SHOP", description="Use `/buy <item_id>`.", color=0x9370DB)
     pets = "\n".join(f"**{v['display']}** (`{k}`) — 🪙 {v['price']}\n*{v['desc']}*"
                      for k, v in SHOP_ITEMS.items() if v["type"]=="Pet")
     badges = "\n".join(f"**{v['display']}** (`{k}`) — 🪙 {v['price']}\n*{v['desc']}*"
@@ -954,8 +1341,7 @@ async def buy(i, item_id: str):
     eco[uid]["inventory"].append(item_id)
     save_data("economy", eco)
     await i.followup.send(embed=discord.Embed(title="🎉 Purchase Successful!",
-        description=f"You own **{it['display']}**!\n🪙 -{it['price']} coins",
-        color=0x32CD32))
+        description=f"You own **{it['display']}**!\n🪙 -{it['price']} coins", color=0x32CD32))
 
 @bot.tree.command(name="inventory", description="🎒 View your inventory")
 async def inventory(i):
@@ -973,8 +1359,9 @@ async def inventory(i):
         emb.add_field(name="🏅 Badges", value="\n".join(badges) or "None", inline=True)
     await i.response.send_message(embed=emb)
 
+
 # ==============================================================================
-# 🏆 LEADERBOARDS + GIVEAWAYS + TICKETS + EMBED
+# 🏆 LEADERBOARD, GIVEAWAYS, TICKETS, EMBEDS
 # ==============================================================================
 @bot.tree.command(name="richest", description="🏆 Top 10 richest members")
 async def richest(i):
@@ -1011,8 +1398,7 @@ async def gstart(i, duration: str, winners: int, prize: str):
     gm = await i.followup.send(embed=emb, wait=True)
     await gm.add_reaction("🎉")
     await asyncio.sleep(secs)
-    try:
-        gm = await i.channel.fetch_message(gm.id)
+    try: gm = await i.channel.fetch_message(gm.id)
     except Exception: return
     r = discord.utils.get(gm.reactions, emoji="🎉")
     if not r: return
@@ -1029,15 +1415,16 @@ async def gstart(i, duration: str, winners: int, prize: str):
 @bot.tree.command(name="ticket_config", description="⚙️ Configure ticket system")
 @commands.has_permissions(administrator=True)
 async def ticket_config(i, panel_description: str = None, welcome_title: str = None,
-                        welcome_message: str = None, staff_role: discord.Role = None):
-    gid = str(i.guild.id)
-    tc = load_data("ticket_config", {})
-    tc.setdefault(gid, {})
-    if panel_description: tc[gid]["panel_desc"] = panel_description
-    if welcome_title: tc[gid]["welcome_title"] = welcome_title
-    if welcome_message: tc[gid]["welcome_msg"] = welcome_message
-    if staff_role: tc[gid]["staff_role_id"] = str(staff_role.id)
-    save_data("ticket_config", tc)
+                        welcome_message: str = None, staff_role: discord.Role = None,
+                        log_channel: discord.TextChannel = None):
+    cfg = get_guild_cfg(i.guild.id)
+    if panel_description: cfg["ticket_panel_description"] = panel_description
+    if welcome_title: cfg["ticket_welcome_title"] = welcome_title
+    if welcome_message: cfg["ticket_welcome_message"] = welcome_message
+    if staff_role: cfg["ticket_staff_role"] = str(staff_role.id)
+    if log_channel: cfg["ticket_log_channel"] = str(log_channel.id)
+    cfg["ticket_enabled"] = True
+    persist_guild_cfg()
     await i.response.send_message(embed=discord.Embed(title="✅ Ticket Settings Saved",
         color=0x57F287), ephemeral=True)
 
@@ -1045,15 +1432,21 @@ async def ticket_config(i, panel_description: str = None, welcome_title: str = N
 @commands.has_permissions(administrator=True)
 async def ticket_setup(i, channel: discord.TextChannel):
     await i.response.send_message(f"⏳ Deploying to {channel.mention}...", ephemeral=True)
-    tc = load_data("ticket_config", {}).get(str(i.guild.id), {})
-    desc = tc.get("panel_desc", "Need assistance? Click below for a private support channel.")
-    emb = discord.Embed(title="📩 Help & Support Portal", description=desc, color=0x57F287)
+    cfg = get_guild_cfg(i.guild.id)
+    cfg["ticket_panel_channel"] = str(channel.id)
+    cfg["ticket_enabled"] = True
+    persist_guild_cfg()
+    emb = discord.Embed(
+        title=cfg.get("ticket_panel_title", "📩 Help & Support Portal"),
+        description=cfg.get("ticket_panel_description", "Click below to open a ticket."),
+        color=0x57F287)
     emb.set_footer(text="Automated Helpdesk")
     try:
         await channel.send(embed=emb, view=TicketLauncherView())
         await i.edit_original_response(content=f"✅ Panel deployed in {channel.mention}")
     except discord.Forbidden:
-        await i.edit_original_response(content="❌ No permission in that channel.")
+        await i.edit_original_response(content="❌ No permission.")
+
 
 class EmbedModal(discord.ui.Modal, title="🎨 Custom Embed Builder"):
     t = discord.ui.TextInput(label="Title", max_length=256)
@@ -1084,8 +1477,9 @@ class EmbedModal(discord.ui.Modal, title="🎨 Custom Embed Builder"):
 async def embed_builder(i, channel: discord.TextChannel):
     await i.response.send_modal(EmbedModal(channel))
 
+
 # ==============================================================================
-# ⏰ REMINDERS, POLLS, UTILS
+# ⏰ UTILITIES
 # ==============================================================================
 @bot.tree.command(name="remindme", description="⏰ Set a reminder")
 async def remindme(i, time_str: str, text: str):
@@ -1136,7 +1530,7 @@ async def ping(i):
 @bot.tree.command(name="help", description="📖 View commands")
 async def help_cmd(i):
     e = discord.Embed(title="Stardust Suite", description="Active modules:", color=0x5865F2)
-    e.add_field(name="⚙️ Welcome", value="`/welcome-set` `/welcome-test` `/welcome-reset`", inline=False)
+    e.add_field(name="⚙️ Welcome/Leave", value="`/welcome-set` `/welcome-test` `/welcome-reset`", inline=False)
     e.add_field(name="🛡️ Moderation", value="`/kick` `/ban` `/mute` `/warn` `/addrole` `/removerole`", inline=False)
     e.add_field(name="💰 Economy", value="`/daily` `/wallet` `/shop` `/buy` `/inventory` `/serve`", inline=False)
     e.add_field(name="📊 Levels", value="`/rank` `/level-set-channel` `/richest`", inline=False)
@@ -1170,29 +1564,28 @@ async def play_slap(i, opponent: discord.User = None):
     v = SlapView(i.user, opponent)
     await i.response.send_message(f"💥 **Slap Fight!** {i.user.mention} vs {opponent.mention if opponent else '🤖 Bot'}\n\nTurn: {i.user.mention}", view=v)
 
+
 # ==============================================================================
 # 🔄 BACKGROUND LOOPS
 # ==============================================================================
 @tasks.loop(seconds=60)
 async def reminder_checker_loop():
-    # Cleanup expired sessions
     now = time.time()
     changed = False
     for sid in list(SESSIONS.keys()):
         if SESSIONS[sid].get("expires", 0) < now:
             del SESSIONS[sid]
             changed = True
-    if changed:
-        persist_sessions()
+    if changed: persist_sessions()
+
 
 # ==============================================================================
-# 🌐 FLASK APP + REAL API
+# 🌐 FLASK APP + FULL API
 # ==============================================================================
 flask_app = Flask(__name__)
 flask_app.secret_key = SESSION_SECRET
 flask_app.wsgi_app = ProxyFix(flask_app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
-# Cross-domain CORS with credentials
 CORS(
     flask_app,
     supports_credentials=True,
@@ -1203,108 +1596,74 @@ CORS(
     max_age=3600
 )
 
-# --------- Helpers for cross-domain cookies ---------
+
 def set_session_cookie(resp, sid, max_age=7*86400):
-    """
-    Sets the session cookie with cross-domain friendly attributes.
-    SameSite=None requires Secure=True; browsers only accept it over HTTPS.
-    """
-    resp.set_cookie(
-        "stardust_session",
-        sid,
-        max_age=max_age,
-        httponly=True,
-        secure=True,          # REQUIRED for SameSite=None
-        samesite="None",      # allows cross-site (GitHub Pages → Render)
-        path="/",
-        domain=None           # host-only cookie for onrender.com
-    )
+    resp.set_cookie("stardust_session", sid, max_age=max_age, httponly=True,
+                    secure=True, samesite="None", path="/", domain=None)
 
 def clear_session_cookie(resp):
-    resp.delete_cookie(
-        "stardust_session",
-        path="/",
-        secure=True,
-        samesite="None",
-        httponly=True
-    )
+    resp.delete_cookie("stardust_session", path="/", secure=True,
+                       samesite="None", httponly=True)
+
 
 # --------- Public ---------
 @flask_app.route("/")
 def home():
-    return jsonify({"status": "ok", "service": "Stardust API", "version": "2.1.0"})
+    return jsonify({"status": "ok", "service": "Stardust API", "version": "3.0.0"})
 
 @flask_app.route("/api/health")
 def health():
     try:
         ready = bot.is_ready()
-        return jsonify({
-            "success": True,
-            "data": {
-                "api": "ok",
-                "bot_ready": ready,
-                "bot_latency_ms": round(bot.latency * 1000) if ready else None,
-                "guild_count": len(bot.guilds) if ready else 0,
-                "timestamp": int(time.time())
-            }
-        })
+        return jsonify({"success": True, "data": {
+            "api": "ok",
+            "bot_ready": ready,
+            "bot_latency_ms": round(bot.latency * 1000) if ready else None,
+            "guild_count": len(bot.guilds) if ready else 0,
+            "timestamp": int(time.time())
+        }})
     except Exception as e:
         return jsonify({"success": False, "error": {"code": "HEALTH_ERR", "message": str(e)}}), 500
 
-# --------- OAuth Step 1 ---------
+
+# --------- OAuth ---------
 @flask_app.route("/api/login")
 def api_login():
     if not CLIENT_ID:
         return jsonify({"success": False, "error": {"code": "NO_CLIENT", "message": "Server misconfigured"}}), 500
     state = secrets.token_urlsafe(24)
-    scope = "identify guilds"
     url = (
         f"https://discord.com/oauth2/authorize"
         f"?client_id={CLIENT_ID}"
         f"&redirect_uri={requests.utils.quote(OAUTH_REDIRECT, safe='')}"
         f"&response_type=code"
-        f"&scope={scope.replace(' ', '%20')}"
+        f"&scope=identify%20guilds"
         f"&state={state}"
         f"&prompt=consent"
     )
     return jsonify({"success": True, "data": {"url": url, "state": state}})
 
-# --------- OAuth Step 2 (callback) ---------
 @flask_app.route("/api/callback")
 def api_callback():
     code = request.args.get("code")
     if not code:
         return redirect(f"{FRONTEND_URL}/?login_error=missing_code")
     try:
-        r = requests.post(
-            "https://discord.com/api/oauth2/token",
-            data={
-                "client_id": CLIENT_ID,
-                "client_secret": CLIENT_SECRET,
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": OAUTH_REDIRECT
-            },
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            timeout=15
-        )
+        r = requests.post("https://discord.com/api/oauth2/token", data={
+            "client_id": CLIENT_ID, "client_secret": CLIENT_SECRET,
+            "grant_type": "authorization_code", "code": code,
+            "redirect_uri": OAUTH_REDIRECT
+        }, headers={"Content-Type": "application/x-www-form-urlencoded"}, timeout=15)
         if r.status_code != 200:
-            print(f"[OAUTH] token exchange failed: {r.status_code} {r.text}")
+            print(f"[OAUTH] {r.status_code} {r.text}")
             return redirect(f"{FRONTEND_URL}/?login_error=oauth_failed")
-
         tok = r.json()
         access_token = tok.get("access_token")
-
-        u = requests.get(
-            "https://discord.com/api/users/@me",
-            headers={"Authorization": f"Bearer {access_token}"},
-            timeout=15
-        ).json()
-
+        u = requests.get("https://discord.com/api/users/@me",
+                         headers={"Authorization": f"Bearer {access_token}"}, timeout=15).json()
         uid = u.get("id")
         if not uid:
             return redirect(f"{FRONTEND_URL}/?login_error=user_fetch")
-
         sid = secrets.token_urlsafe(32)
         SESSIONS[sid] = {
             "user_id": uid,
@@ -1316,48 +1675,41 @@ def api_callback():
             "expires": int(time.time()) + 7*86400
         }
         persist_sessions()
-
         resp = make_response(redirect(f"{FRONTEND_URL}/?login=success"))
         set_session_cookie(resp, sid)
         return resp
     except Exception as e:
-        print(f"[OAUTH] exception: {e}")
+        print(f"[OAUTH] {e}")
         traceback.print_exc()
         return redirect(f"{FRONTEND_URL}/?login_error=server")
 
-# --------- Session helpers ---------
+
 def get_session():
     sid = request.cookies.get("stardust_session")
-    if not sid or sid not in SESSIONS:
-        return None
+    if not sid or sid not in SESSIONS: return None
     s = SESSIONS[sid]
     if s.get("expires", 0) < time.time():
-        del SESSIONS[sid]
-        persist_sessions()
+        del SESSIONS[sid]; persist_sessions()
         return None
     return s
 
-# --------- Auth endpoints ---------
+
 @flask_app.route("/api/auth/me")
 def auth_me():
     s = get_session()
     if not s:
         return jsonify({"success": False, "error": {"code": "UNAUTHORIZED", "message": "Not logged in"}}), 401
     return jsonify({"success": True, "data": {
-        "id": s["user_id"],
-        "username": s["username"],
-        "global_name": s.get("global_name"),
-        "avatar": s.get("avatar")
+        "id": s["user_id"], "username": s["username"],
+        "global_name": s.get("global_name"), "avatar": s.get("avatar")
     }})
 
 @flask_app.route("/api/logout", methods=["POST", "OPTIONS"])
 def auth_logout():
-    if request.method == "OPTIONS":
-        return ("", 204)
+    if request.method == "OPTIONS": return ("", 204)
     sid = request.cookies.get("stardust_session")
     if sid and sid in SESSIONS:
-        del SESSIONS[sid]
-        persist_sessions()
+        del SESSIONS[sid]; persist_sessions()
     resp = make_response(jsonify({"success": True}))
     clear_session_cookie(resp)
     return resp
@@ -1368,11 +1720,8 @@ def auth_servers():
     if not s:
         return jsonify({"success": False, "error": {"code": "UNAUTHORIZED", "message": "Not logged in"}}), 401
     try:
-        r = requests.get(
-            "https://discord.com/api/users/@me/guilds",
-            headers={"Authorization": f"Bearer {s['access_token']}"},
-            timeout=15
-        )
+        r = requests.get("https://discord.com/api/users/@me/guilds",
+                         headers={"Authorization": f"Bearer {s['access_token']}"}, timeout=15)
         if r.status_code != 200:
             return jsonify({"success": False, "error": {"code": "DISCORD_ERROR", "message": "Couldn't fetch guilds"}}), 502
         guilds = r.json()
@@ -1382,12 +1731,9 @@ def auth_servers():
             perms = int(g.get("permissions", 0))
             is_admin = bool(perms & 0x8) or bool(perms & 0x20)
             out.append({
-                "id": g["id"],
-                "name": g["name"],
-                "icon": g.get("icon"),
+                "id": g["id"], "name": g["name"], "icon": g.get("icon"),
                 "owner": g.get("owner", False),
-                "permissions": perms,
-                "can_manage": is_admin,
+                "permissions": perms, "can_manage": is_admin,
                 "bot_present": g["id"] in bot_guild_ids
             })
         return jsonify({"success": True, "data": out})
@@ -1395,30 +1741,41 @@ def auth_servers():
         print(f"[SERVERS] {e}")
         return jsonify({"success": False, "error": {"code": "SERVER_ERROR", "message": "Failed"}}), 500
 
-# --------- Guild access validation ---------
+
 def _require_guild_access(guild_id):
     s = get_session()
     if not s:
         return None, (jsonify({"success": False, "error": {"code": "UNAUTHORIZED", "message": "Not logged in"}}), 401)
     try:
-        r = requests.get(
-            "https://discord.com/api/users/@me/guilds",
-            headers={"Authorization": f"Bearer {s['access_token']}"},
-            timeout=15
-        )
-        guilds = r.json() if r.status_code == 200 else []
+        guilds = None
+        for attempt in range(2):
+            try:
+                r = requests.get("https://discord.com/api/users/@me/guilds",
+                                 headers={"Authorization": f"Bearer {s['access_token']}"}, timeout=15)
+                if r.status_code == 200:
+                    guilds = r.json(); break
+                elif r.status_code == 429:
+                    time.sleep(1.5); continue
+                else:
+                    guilds = []; break
+            except requests.RequestException as e:
+                print(f"[GUILD_ACCESS] attempt {attempt+1}: {e}")
+                if attempt == 0: time.sleep(0.5); continue
+                guilds = []; break
+        if guilds is None: guilds = []
         target = next((g for g in guilds if g["id"] == guild_id), None)
         if not target:
-            return None, (jsonify({"success": False, "error": {"code": "FORBIDDEN", "message": "Not a member of this server"}}), 403)
+            return None, (jsonify({"success": False, "error": {"code": "FORBIDDEN", "message": "Not a member"}}), 403)
         perms = int(target.get("permissions", 0))
         if not (perms & 0x8 or perms & 0x20):
-            return None, (jsonify({"success": False, "error": {"code": "FORBIDDEN", "message": "Missing administrator permission"}}), 403)
+            return None, (jsonify({"success": False, "error": {"code": "FORBIDDEN", "message": "Missing admin permission"}}), 403)
         if not bot.is_ready() or not bot.get_guild(int(guild_id)):
-            return None, (jsonify({"success": False, "error": {"code": "BOT_MISSING", "message": "Stardust is not on this server"}}), 409)
+            return None, (jsonify({"success": False, "error": {"code": "BOT_MISSING", "message": "Bot not on this server"}}), 409)
         return s, None
     except Exception as e:
         print(f"[GUILD_ACCESS] {e}")
         return None, (jsonify({"success": False, "error": {"code": "SERVER_ERROR", "message": "Failed"}}), 500)
+
 
 # --------- Guild overview ---------
 @flask_app.route("/api/guilds/<guild_id>/overview")
@@ -1428,53 +1785,109 @@ def guild_overview(guild_id):
     g = bot.get_guild(int(guild_id))
     if not g:
         return jsonify({"success": False, "error": {"code": "BOT_MISSING", "message": "Bot not present"}}), 409
-    cfg = SERVER_CONFIGS.get(guild_id, {})
+    cfg = get_guild_cfg(guild_id)
     return jsonify({"success": True, "data": {
-        "id": g.id,
-        "name": g.name,
+        "id": g.id, "name": g.name,
         "icon": g.icon.url if g.icon else None,
         "member_count": g.member_count,
         "channel_count": len(g.channels),
         "role_count": len(g.roles),
-        "bot_latency_ms": round(bot.latency * 1000),
+        "bot_latency_ms": round(bot.latency*1000),
         "bot_present": True,
         "modules": {
-            "welcome": bool(cfg.get("channel")),
+            "welcome": bool(cfg.get("welcome_enabled")),
+            "leave": bool(cfg.get("leave_enabled")),
+            "booster": bool(cfg.get("booster_enabled")),
             "automod": cfg.get("automod_enabled", True),
-            "reward": bool(cfg.get("reward_channel")),
-            "leveling": bool(cfg.get("level_channel")),
-            "tickets": bool(load_data("ticket_config", {}).get(guild_id)),
-            "leave": bool(load_data("leave_config", {}).get(guild_id, {}).get("channel_id")),
+            "autoresponder": cfg.get("autoresponder_enabled", True),
+            "leveling": bool(cfg.get("level_enabled")),
+            "economy": bool(cfg.get("economy_enabled")),
+            "reward": bool(cfg.get("economy_reward_channel")),
+            "tickets": bool(cfg.get("ticket_enabled")),
+            "logging": bool(cfg.get("logging_enabled")),
         }
     }})
+
+
+# --------- Channels ---------
+@flask_app.route("/api/guilds/<guild_id>/channels")
+def guild_channels(guild_id):
+    s, err = _require_guild_access(guild_id)
+    if err: return err
+    g = bot.get_guild(int(guild_id))
+    if not g:
+        return jsonify({"success": False, "error": {"code": "BOT_MISSING", "message": "Bot not present"}}), 409
+    channels = []
+    for ch in g.channels:
+        try: perms = ch.permissions_for(g.me)
+        except Exception: perms = None
+        is_text = isinstance(ch, discord.TextChannel)
+        can_send = bool(perms and perms.send_messages and perms.view_channel) if is_text else False
+        entry = {
+            "id": str(ch.id), "name": ch.name,
+            "type": "text" if is_text else ("category" if isinstance(ch, discord.CategoryChannel) else ("voice" if isinstance(ch, discord.VoiceChannel) else "other")),
+            "category_id": str(ch.category_id) if getattr(ch, "category_id", None) else None,
+            "position": ch.position,
+            "can_send": can_send
+        }
+        channels.append(entry)
+    channels.sort(key=lambda c: (c["category_id"] or "", c["position"]))
+    return jsonify({"success": True, "data": channels})
+
+
+# --------- Roles ---------
+@flask_app.route("/api/guilds/<guild_id>/roles")
+def guild_roles(guild_id):
+    s, err = _require_guild_access(guild_id)
+    if err: return err
+    g = bot.get_guild(int(guild_id))
+    if not g:
+        return jsonify({"success": False, "error": {"code": "BOT_MISSING", "message": "Bot not present"}}), 409
+    roles = []
+    bot_top = g.me.top_role.position if g.me else 0
+    for r in g.roles:
+        if r.is_default(): continue
+        roles.append({
+            "id": str(r.id), "name": r.name,
+            "color": r.color.value if r.color else 0,
+            "position": r.position,
+            "managed": r.managed,
+            "mentionable": r.mentionable,
+            "assignable": r.position < bot_top
+        })
+    roles.sort(key=lambda r: r["position"], reverse=True)
+    return jsonify({"success": True, "data": roles})
+
 
 # --------- Config ---------
 @flask_app.route("/api/guilds/<guild_id>/config", methods=["GET"])
 def get_config(guild_id):
     s, err = _require_guild_access(guild_id)
     if err: return err
-    return jsonify({"success": True, "data": SERVER_CONFIGS.get(guild_id, {})})
+    cfg = get_guild_cfg(guild_id)
+    persist_guild_cfg()  # ensure defaults persisted
+    return jsonify({"success": True, "data": cfg})
 
 @flask_app.route("/api/guilds/<guild_id>/config", methods=["PATCH", "OPTIONS"])
 def patch_config(guild_id):
-    if request.method == "OPTIONS":
-        return ("", 204)
+    if request.method == "OPTIONS": return ("", 204)
     s, err = _require_guild_access(guild_id)
     if err: return err
     body = request.get_json(silent=True) or {}
-    allowed = {"channel", "reward_channel", "level_channel", "level_msg", "automod_enabled"}
-    cfg = SERVER_CONFIGS.setdefault(guild_id, {})
+    cfg = get_guild_cfg(guild_id)
+    # Accept any key that exists in DEFAULT_GUILD_CONFIG
+    allowed = set(DEFAULT_GUILD_CONFIG.keys())
     for k, v in body.items():
         if k in allowed:
             cfg[k] = v
-    persist_server_configs()
+    persist_guild_cfg()
     return jsonify({"success": True, "data": cfg})
+
 
 # --------- AutoMod words ---------
 @flask_app.route("/api/guilds/<guild_id>/automod/words", methods=["GET", "POST", "DELETE", "OPTIONS"])
 def automod_words(guild_id):
-    if request.method == "OPTIONS":
-        return ("", 204)
+    if request.method == "OPTIONS": return ("", 204)
     s, err = _require_guild_access(guild_id)
     if err: return err
     words = BLOCK_LIST.setdefault("words", [])
@@ -1485,13 +1898,57 @@ def automod_words(guild_id):
     if not w:
         return jsonify({"success": False, "error": {"code": "INVALID", "message": "Word required"}}), 400
     if request.method == "POST":
-        if w not in words:
-            words.append(w)
+        if w not in words: words.append(w)
     else:
-        if w in words:
-            words.remove(w)
+        if w in words: words.remove(w)
     persist_block_list()
     return jsonify({"success": True, "data": words})
+
+
+# --------- Auto-Responder ---------
+@flask_app.route("/api/guilds/<guild_id>/autoresponder", methods=["GET", "POST", "DELETE", "OPTIONS"])
+def autoresponder(guild_id):
+    if request.method == "OPTIONS": return ("", 204)
+    s, err = _require_guild_access(guild_id)
+    if err: return err
+    gid = str(guild_id)
+    AUTO_RESPONSES.setdefault(gid, {})
+    if request.method == "GET":
+        return jsonify({"success": True, "data": AUTO_RESPONSES.get(gid, {})})
+    body = request.get_json(silent=True) or {}
+    trigger = (body.get("trigger") or "").lower().strip()
+    if not trigger:
+        return jsonify({"success": False, "error": {"code": "INVALID", "message": "Trigger required"}}), 400
+    if request.method == "POST":
+        AUTO_RESPONSES[gid][trigger] = body.get("response", "")
+    else:
+        if trigger in AUTO_RESPONSES[gid]:
+            del AUTO_RESPONSES[gid][trigger]
+    persist_auto_responses()
+    return jsonify({"success": True, "data": AUTO_RESPONSES.get(gid, {})})
+
+
+# --------- Custom Commands ---------
+@flask_app.route("/api/guilds/<guild_id>/custom_commands", methods=["GET", "POST", "DELETE", "OPTIONS"])
+def custom_commands(guild_id):
+    if request.method == "OPTIONS": return ("", 204)
+    s, err = _require_guild_access(guild_id)
+    if err: return err
+    cfg = get_guild_cfg(guild_id)
+    cmds = cfg.setdefault("custom_commands", {})
+    if request.method == "GET":
+        return jsonify({"success": True, "data": cmds})
+    body = request.get_json(silent=True) or {}
+    trigger = (body.get("trigger") or "").lower().strip()
+    if not trigger:
+        return jsonify({"success": False, "error": {"code": "INVALID", "message": "Trigger required"}}), 400
+    if request.method == "POST":
+        cmds[trigger] = body.get("response", "")
+    else:
+        if trigger in cmds: del cmds[trigger]
+    persist_guild_cfg()
+    return jsonify({"success": True, "data": cmds})
+
 
 # --------- Economy leaderboard ---------
 @flask_app.route("/api/guilds/<guild_id>/economy/leaderboard")
@@ -1516,31 +1973,27 @@ def economy_lb(guild_id):
         })
     return jsonify({"success": True, "data": out})
 
+
 # --------- Giveaway ---------
 @flask_app.route("/api/guilds/<guild_id>/giveaway", methods=["POST", "OPTIONS"])
 def api_giveaway(guild_id):
-    if request.method == "OPTIONS":
-        return ("", 204)
+    if request.method == "OPTIONS": return ("", 204)
     s, err = _require_guild_access(guild_id)
     if err: return err
     body = request.get_json(silent=True) or {}
-    prize = body.get("prize")
-    duration = body.get("duration")
-    winners = int(body.get("winners", 1))
-    channel_id = body.get("channel_id")
+    prize = body.get("prize"); duration = body.get("duration")
+    winners = int(body.get("winners", 1)); channel_id = body.get("channel_id")
     if not (prize and duration and channel_id):
         return jsonify({"success": False, "error": {"code": "INVALID", "message": "Missing fields"}}), 400
     asyncio.run_coroutine_threadsafe(
         _deploy_giveaway(guild_id, channel_id, duration, winners, prize, s["user_id"]),
-        bot.loop
-    )
+        bot.loop)
     return jsonify({"success": True, "data": {"queued": True}})
 
 async def _deploy_giveaway(guild_id, channel_id, duration, winners, prize, host_id):
     secs = parse_duration(duration)
     if secs <= 0: return
-    g = bot.get_guild(int(guild_id))
-    ch = g.get_channel(int(channel_id)) if g else None
+    g = bot.get_guild(int(guild_id)); ch = g.get_channel(int(channel_id)) if g else None
     if not ch: return
     emb = discord.Embed(title=f"🎁 {prize.upper()} 🎁",
         description=(f"♡ React with 🎉!\n♡ **Ends:** in {duration}\n"
@@ -1549,10 +2002,8 @@ async def _deploy_giveaway(guild_id, channel_id, duration, winners, prize, host_
     m = await ch.send(embed=emb)
     await m.add_reaction("🎉")
     await asyncio.sleep(secs)
-    try:
-        m = await ch.fetch_message(m.id)
-    except Exception:
-        return
+    try: m = await ch.fetch_message(m.id)
+    except Exception: return
     r = discord.utils.get(m.reactions, emoji="🎉")
     if not r: return
     users = [u async for u in r.users() if not u.bot]
@@ -1562,11 +2013,11 @@ async def _deploy_giveaway(guild_id, channel_id, duration, winners, prize, host_
     await m.edit(embed=discord.Embed(title="🎉 ENDED",
         description=f"♡ **{prize}**\n♡ Winners: {', '.join(w.mention for w in chosen)}", color=0x32CD32))
 
+
 # --------- Embed send ---------
 @flask_app.route("/api/guilds/<guild_id>/embed", methods=["POST", "OPTIONS"])
 def api_embed(guild_id):
-    if request.method == "OPTIONS":
-        return ("", 204)
+    if request.method == "OPTIONS": return ("", 204)
     s, err = _require_guild_access(guild_id)
     if err: return err
     body = request.get_json(silent=True) or {}
@@ -1577,15 +2028,14 @@ def api_embed(guild_id):
     return jsonify({"success": True, "data": {"queued": True}})
 
 async def _send_embed(guild_id, ch_id, body, author_id):
-    g = bot.get_guild(int(guild_id))
-    ch = g.get_channel(int(ch_id)) if g else None
+    g = bot.get_guild(int(guild_id)); ch = g.get_channel(int(ch_id)) if g else None
     if not ch: return
     try:
         col = discord.Color.blurple()
         if body.get("color"):
             try: col = discord.Color.from_str(body["color"])
             except Exception: pass
-        emb = discord.Embed(title=body.get("title", ""), description=body.get("description", ""),
+        emb = discord.Embed(title=body.get("title",""), description=body.get("description",""),
                             color=col, timestamp=discord.utils.utcnow())
         emb.set_footer(text=f"By {author_id}")
         if body.get("image_url") and str(body["image_url"]).startswith("http"):
@@ -1594,11 +2044,11 @@ async def _send_embed(guild_id, ch_id, body, author_id):
     except Exception as e:
         print(f"[EMBED_SEND] {e}")
 
+
 # --------- Ticket deploy ---------
 @flask_app.route("/api/guilds/<guild_id>/tickets/deploy", methods=["POST", "OPTIONS"])
 def api_ticket_deploy(guild_id):
-    if request.method == "OPTIONS":
-        return ("", 204)
+    if request.method == "OPTIONS": return ("", 204)
     s, err = _require_guild_access(guild_id)
     if err: return err
     body = request.get_json(silent=True) or {}
@@ -1609,17 +2059,19 @@ def api_ticket_deploy(guild_id):
     return jsonify({"success": True, "data": {"queued": True}})
 
 async def _deploy_ticket_panel(guild_id, ch_id):
-    g = bot.get_guild(int(guild_id))
-    ch = g.get_channel(int(ch_id)) if g else None
+    g = bot.get_guild(int(guild_id)); ch = g.get_channel(int(ch_id)) if g else None
     if not ch: return
-    tc = load_data("ticket_config", {}).get(str(guild_id), {})
-    desc = tc.get("panel_desc", "Need assistance? Click below for a private support channel.")
-    emb = discord.Embed(title="📩 Help & Support Portal", description=desc, color=0x57F287)
+    cfg = get_guild_cfg(guild_id)
+    emb = discord.Embed(
+        title=cfg.get("ticket_panel_title", "📩 Help & Support Portal"),
+        description=cfg.get("ticket_panel_description", "Click below to open a ticket."),
+        color=0x57F287)
     emb.set_footer(text="Stardust Helpdesk")
     try:
         await ch.send(embed=emb, view=TicketLauncherView())
     except Exception as e:
         print(f"[TICKET_DEPLOY] {e}")
+
 
 # ==============================================================================
 # 🚀 STARTUP
@@ -1641,7 +2093,7 @@ def run_bot():
         traceback.print_exc()
 
 if __name__ == "__main__":
-    print("🚀 Starting Stardust…")
+    print("🚀 Starting Stardust v3.0…")
     keep_alive()
     time.sleep(2)
     run_bot()
