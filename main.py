@@ -1,6 +1,6 @@
 # ==============================================================================
-# 🌟 STARDUST BOT — PRODUCTION v3.1
-# Fully customizable + guild access caching
+# 🌟 STARDUST BOT — PRODUCTION v3.2
+# Fully customizable + mention-outside-embed fix + guild caching
 # ==============================================================================
 import os, io, json, time, random, asyncio, secrets, datetime, traceback, re
 from threading import Thread
@@ -235,12 +235,17 @@ def _safe_format(template, **kwargs):
         out = out.replace("{" + k + "}", str(v))
     return out
 
+def _strip_mentions_from_embed_text(text: str) -> str:
+    """Remove raw <@id> style mentions from embed text so we don't double-ping."""
+    if not text: return text
+    # Only strip mention-like tokens from embed body (content gets them instead)
+    return re.sub(r"<@!?\d+>", "", text).strip()
+
 def generate_welcome_card(member):
     desc = (
         "╭🎈━━━━━━━━━━━━━━━━━━━━━━━━━━╮\n"
         "   ⭐  *𝑾𝒆𝒍𝒄𝒐𝒎𝒆 𝒕𝒐 𝑺𝒕𝒂𝒓𝒅𝒖𝒔𝒕 𝑪𝒂𝒇𝒆!* ⭐\n"
         "╰━━━━━━━━━━━━━━━━━━━━━━━━━━🎈╯\n\n"
-        f"𝖧𝖾𝗒 {member.mention}! (⁠◠⁠‿⁠◕⁠)\n\n"
         f"**Identity:** {member.name} | **Member Count:** #{member.guild.member_count}"
     )
     return discord.Embed(description=desc, color=discord.Color.from_rgb(47, 49, 54))
@@ -395,7 +400,7 @@ class TicketLauncherView(discord.ui.View):
             )
             embed = discord.Embed(
                 title=welcome_title,
-                description=_safe_format(welcome_msg, user=member.mention, server=guild.name),
+                description=_safe_format(welcome_msg, user=member.name, server=guild.name),
                 color=discord.Color.blue(),
                 timestamp=discord.utils.utcnow()
             )
@@ -756,53 +761,94 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
+
+# --------- on_member_join (mention OUTSIDE embed for real ping) ---------
 @bot.event
 async def on_member_join(member):
     cfg = get_guild_cfg(member.guild.id)
-    if cfg.get("welcome_enabled"):
-        ch_id = cfg.get("welcome_channel")
-        ch = member.guild.get_channel(int(ch_id)) if str(ch_id or "").isdigit() else None
-        if ch:
+    if not cfg.get("welcome_enabled"):
+        return
+    ch_id = cfg.get("welcome_channel")
+    ch = member.guild.get_channel(int(ch_id)) if str(ch_id or "").isdigit() else None
+    if not ch:
+        return
+
+    want_mention = cfg.get("welcome_mention", True)
+
+    try:
+        if cfg.get("welcome_use_embed"):
+            col = _hex_to_rgb(cfg.get("welcome_embed_color"), (47, 49, 54))
+            # Strip raw mentions from embed text so we don't spam pings
+            title_raw = _safe_format(
+                cfg.get("welcome_embed_title", ""),
+                member=member.mention, user=member.mention,
+                server=member.guild.name, name=member.name, count=member.guild.member_count
+            )
+            desc_raw = _safe_format(
+                cfg.get("welcome_embed_description", ""),
+                member=member.mention, user=member.mention,
+                server=member.guild.name, name=member.name, count=member.guild.member_count
+            )
+            # Keep member.mention in embed text if user *doesn't* want a ping,
+            # otherwise show plain name to avoid visual clutter
+            if want_mention:
+                title = _strip_mentions_from_embed_text(title_raw)
+                desc = _strip_mentions_from_embed_text(desc_raw)
+            else:
+                title = title_raw
+                desc = desc_raw
+
+            emb = discord.Embed(
+                title=title or None,
+                description=desc or None,
+                color=discord.Color.from_rgb(*col)
+            )
+            img = cfg.get("welcome_embed_image")
+            if img and str(img).startswith("http"):
+                emb.set_image(url=img)
             try:
-                msg_template = cfg.get("welcome_message", "")
-                content = _safe_format(msg_template, member=member.mention, user=member.mention,
-                                       server=member.guild.name, name=member.name,
-                                       count=member.guild.member_count) if msg_template else ""
-                if not cfg.get("welcome_mention", True) and content:
-                    content = content.replace(member.mention, member.name)
+                emb.set_thumbnail(url=member.display_avatar.url)
+            except Exception:
+                pass
 
-                if cfg.get("welcome_use_embed"):
-                    col = _hex_to_rgb(cfg.get("welcome_embed_color"), (47,49,54))
-                    title = _safe_format(cfg.get("welcome_embed_title",""), member=member.mention, server=member.guild.name, name=member.name, count=member.guild.member_count)
-                    desc = _safe_format(cfg.get("welcome_embed_description",""), member=member.mention, server=member.guild.name, name=member.name, count=member.guild.member_count)
-                    emb = discord.Embed(
-                        title=title or None,
-                        description=desc or None,
-                        color=discord.Color.from_rgb(*col)
-                    )
-                    img = cfg.get("welcome_embed_image")
-                    if img and str(img).startswith("http"):
-                        emb.set_image(url=img)
-                    emb.set_thumbnail(url=member.display_avatar.url)
-                    await ch.send(content=content or None, embed=emb)
-                else:
-                    if cfg.get("welcome_use_card"):
-                        await ch.send(content=content or None, embed=generate_welcome_card(member))
-                    else:
-                        await ch.send(content=content or f"Welcome {member.mention}!")
-            except Exception as e:
-                print(f"[WELCOME] {e}")
+            # Mention (if wanted) goes in the content OUTSIDE the embed
+            content_out = member.mention if want_mention else None
+            await ch.send(content=content_out, embed=emb)
+        else:
+            # Plain text path
+            msg = _safe_format(
+                cfg.get("welcome_message", ""),
+                member=member.mention, user=member.mention,
+                server=member.guild.name, name=member.name,
+                count=member.guild.member_count
+            )
+            if not want_mention:
+                msg = msg.replace(member.mention, member.name)
+            if not msg:
+                msg = f"Welcome {member.mention}!"
+            await ch.send(content=msg)
+    except Exception as e:
+        print(f"[WELCOME] {e}")
 
-        if cfg.get("welcome_dm"):
-            try:
-                dm_emb = discord.Embed(
-                    title=f"Welcome to {member.guild.name}!",
-                    description=_safe_format(cfg.get("welcome_embed_description",""), member=member.mention, server=member.guild.name, name=member.name, count=member.guild.member_count),
-                    color=discord.Color.from_rgb(*_hex_to_rgb(cfg.get("welcome_embed_color")))
-                )
-                await member.send(embed=dm_emb)
-            except Exception: pass
+    # Welcome DM
+    if cfg.get("welcome_dm"):
+        try:
+            dm_emb = discord.Embed(
+                title=f"Welcome to {member.guild.name}!",
+                description=_safe_format(
+                    cfg.get("welcome_embed_description", ""),
+                    member=member.name, user=member.name,
+                    server=member.guild.name, name=member.name,
+                    count=member.guild.member_count
+                ),
+                color=discord.Color.from_rgb(*_hex_to_rgb(cfg.get("welcome_embed_color")))
+            )
+            await member.send(embed=dm_emb)
+        except Exception:
+            pass
 
+
+# --------- on_member_remove (leave) ---------
 @bot.event
 async def on_member_remove(member):
     cfg = get_guild_cfg(member.guild.id)
@@ -810,17 +856,21 @@ async def on_member_remove(member):
     ch_id = cfg.get("leave_channel")
     ch = member.guild.get_channel(int(ch_id)) if str(ch_id or "").isdigit() else None
     if not ch: return
+
+    # Member already left, so no real mention possible. Use name text.
     try:
-        content = _safe_format(
-            cfg.get("leave_message",""),
-            user=member.mention, member=member.mention,
-            name=member.name, server=member.guild.name,
-            count=member.guild.member_count
-        )
         if cfg.get("leave_use_embed"):
-            col = _hex_to_rgb(cfg.get("leave_embed_color"), (153,170,181))
-            title = _safe_format(cfg.get("leave_embed_title",""), user=member.mention, name=member.name, server=member.guild.name, count=member.guild.member_count)
-            desc = _safe_format(cfg.get("leave_embed_description",""), user=member.mention, name=member.name, server=member.guild.name, count=member.guild.member_count)
+            col = _hex_to_rgb(cfg.get("leave_embed_color"), (153, 170, 181))
+            title = _safe_format(
+                cfg.get("leave_embed_title", ""),
+                user=member.name, name=member.name,
+                server=member.guild.name, count=member.guild.member_count
+            )
+            desc = _safe_format(
+                cfg.get("leave_embed_description", ""),
+                user=member.name, name=member.name,
+                server=member.guild.name, count=member.guild.member_count
+            )
             emb = discord.Embed(
                 title=title or None,
                 description=desc or None,
@@ -829,13 +879,23 @@ async def on_member_remove(member):
             img = cfg.get("leave_embed_image")
             if img and str(img).startswith("http"):
                 emb.set_image(url=img)
-            emb.set_thumbnail(url=member.display_avatar.url)
-            await ch.send(content=content or None, embed=emb)
+            try:
+                emb.set_thumbnail(url=member.display_avatar.url)
+            except Exception:
+                pass
+            await ch.send(embed=emb)
         else:
-            await ch.send(content=content or f"{member.name} left.")
+            msg = _safe_format(
+                cfg.get("leave_message", ""),
+                user=member.name, name=member.name,
+                server=member.guild.name, count=member.guild.member_count
+            )
+            await ch.send(content=msg or f"{member.name} left.")
     except Exception as e:
         print(f"[LEAVE] {e}")
 
+
+# --------- on_member_update (booster, mention OUTSIDE embed) ---------
 @bot.event
 async def on_member_update(before, after):
     if not before.premium_since and after.premium_since:
@@ -861,24 +921,40 @@ async def on_member_update(before, after):
             ch = after.guild.system_channel or (after.guild.text_channels[0] if after.guild.text_channels else None)
         if ch:
             try:
-                content = _safe_format(cfg.get("booster_message",""), user=after.mention, name=after.name, server=after.guild.name)
                 if cfg.get("booster_use_embed"):
-                    col = _hex_to_rgb(cfg.get("booster_embed_color"), (244,127,255))
+                    col = _hex_to_rgb(cfg.get("booster_embed_color"), (244, 127, 255))
                     emb = discord.Embed(
-                        title=_safe_format(cfg.get("booster_embed_title",""), user=after.mention, name=after.name),
-                        description=_safe_format(cfg.get("booster_embed_description",""), user=after.mention, name=after.name, server=after.guild.name),
+                        title=_safe_format(
+                            cfg.get("booster_embed_title", ""),
+                            user=after.name, name=after.name
+                        ),
+                        description=_safe_format(
+                            cfg.get("booster_embed_description", ""),
+                            user=after.name, name=after.name,
+                            server=after.guild.name
+                        ),
                         color=discord.Color.from_rgb(*col)
                     )
                     img = cfg.get("booster_embed_image")
                     if img and str(img).startswith("http"):
                         emb.set_image(url=img)
-                    emb.set_thumbnail(url=after.display_avatar.url)
-                    await ch.send(content=content or None, embed=emb)
+                    try:
+                        emb.set_thumbnail(url=after.display_avatar.url)
+                    except Exception:
+                        pass
+                    # Mention OUTSIDE embed for real ping
+                    await ch.send(content=after.mention, embed=emb)
                 else:
-                    await ch.send(content=content or f"Thank you {after.mention}!")
+                    msg = _safe_format(
+                        cfg.get("booster_message", ""),
+                        user=after.mention, name=after.name, server=after.guild.name
+                    )
+                    await ch.send(content=msg or f"Thank you {after.mention}!")
             except Exception as e:
                 print(f"[BOOSTER] {e}")
 
+
+# --------- on_message_delete / edit / voice ---------
 @bot.event
 async def on_message_delete(message):
     if message.author.bot or not message.guild: return
@@ -923,7 +999,7 @@ async def on_voice_state_update(member, before, after):
     await send_log(member.guild, "voice", emb)
 
 # ==============================================================================
-# 🎬 SLASH COMMANDS (unchanged from v3.0 — abbreviated for space)
+# 🎬 SLASH COMMANDS
 # ==============================================================================
 @bot.tree.command(name="welcome-set", description="⚙️ Map greeting system to a channel")
 @app_commands.checks.has_permissions(administrator=True)
@@ -950,8 +1026,8 @@ async def welcome_test(i):
     ch_id = cfg.get("welcome_channel")
     ch = i.guild.get_channel(int(ch_id)) if str(ch_id or "").isdigit() else None
     if not ch: return await i.response.send_message("Welcome channel not set.", ephemeral=True)
-    content = _safe_format(cfg.get("welcome_message",""), member=i.user.mention, server=i.guild.name, name=i.user.name, count=i.guild.member_count)
-    emb = None
+    want_mention = cfg.get("welcome_mention", True)
+
     if cfg.get("welcome_use_embed"):
         emb = discord.Embed(
             title=_safe_format(cfg.get("welcome_embed_title",""), member=i.user.mention, server=i.guild.name),
@@ -960,7 +1036,13 @@ async def welcome_test(i):
         )
         img = cfg.get("welcome_embed_image")
         if img and str(img).startswith("http"): emb.set_image(url=img)
-    await ch.send(content=content or None, embed=emb)
+        content_out = i.user.mention if want_mention else None
+        await ch.send(content=content_out, embed=emb)
+    else:
+        msg = _safe_format(cfg.get("welcome_message",""), member=i.user.mention, server=i.guild.name, name=i.user.name, count=i.guild.member_count)
+        if not want_mention:
+            msg = msg.replace(i.user.mention, i.user.name)
+        await ch.send(content=msg or f"Welcome {i.user.mention}!")
     await i.response.send_message("✅ Sent.", ephemeral=True)
 
 @bot.tree.command(name="reward-set", description="💰 Set reward channel")
@@ -1513,7 +1595,7 @@ def clear_session_cookie(resp):
 
 @flask_app.route("/")
 def home():
-    return jsonify({"status": "ok", "service": "Stardust API", "version": "3.1.0"})
+    return jsonify({"status": "ok", "service": "Stardust API", "version": "3.2.0"})
 
 @flask_app.route("/api/health")
 def health():
@@ -1646,13 +1728,12 @@ def auth_servers():
 
 
 # ==============================================================================
-# 🚀 GUILD ACCESS WITH CACHING (fixes rate limits + channels dropdown)
+# 🚀 GUILD ACCESS WITH CACHING
 # ==============================================================================
-_GUILD_CACHE = {}  # {session_id: {"guilds": [...], "ts": timestamp}}
-_GUILD_CACHE_TTL = 60  # seconds
+_GUILD_CACHE = {}
+_GUILD_CACHE_TTL = 60
 
 def _fetch_user_guilds(access_token):
-    """Fetch user's guilds from Discord with retry."""
     for attempt in range(2):
         try:
             r = requests.get("https://discord.com/api/users/@me/guilds",
@@ -1660,16 +1741,13 @@ def _fetch_user_guilds(access_token):
             if r.status_code == 200:
                 return r.json()
             elif r.status_code == 429:
-                time.sleep(1.5)
-                continue
+                time.sleep(1.5); continue
             else:
                 print(f"[GUILD_FETCH] Discord API returned {r.status_code}")
                 return []
         except requests.RequestException as e:
             print(f"[GUILD_FETCH] attempt {attempt+1}: {e}")
-            if attempt == 0:
-                time.sleep(0.5)
-                continue
+            if attempt == 0: time.sleep(0.5); continue
             return []
     return []
 
@@ -1677,22 +1755,20 @@ def _require_guild_access(guild_id):
     s = get_session()
     if not s:
         return None, (jsonify({"success": False, "error": {"code": "UNAUTHORIZED", "message": "Not logged in"}}), 401)
-    
+
     sid = request.cookies.get("stardust_session")
     now = time.time()
-    
-    # Check cache
+
     cached = _GUILD_CACHE.get(sid)
     if cached and (now - cached["ts"]) < _GUILD_CACHE_TTL:
         guilds = cached["guilds"]
     else:
         guilds = _fetch_user_guilds(s["access_token"])
         _GUILD_CACHE[sid] = {"guilds": guilds, "ts": now}
-        # Cleanup old entries
         for k in list(_GUILD_CACHE.keys()):
             if now - _GUILD_CACHE[k]["ts"] > 300:
                 del _GUILD_CACHE[k]
-    
+
     target = next((g for g in guilds if g["id"] == guild_id), None)
     if not target:
         return None, (jsonify({"success": False, "error": {"code": "FORBIDDEN", "message": "Not a member"}}), 403)
@@ -2008,7 +2084,7 @@ def run_bot():
         traceback.print_exc()
 
 if __name__ == "__main__":
-    print("🚀 Starting Stardust v3.1…")
+    print("🚀 Starting Stardust v3.2…")
     keep_alive()
     time.sleep(2)
     run_bot()
